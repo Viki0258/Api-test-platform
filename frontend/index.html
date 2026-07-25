@@ -161,6 +161,30 @@
         </section>
       </div>
 
+      <section id="recent-runs" class="panel history-panel" aria-labelledby="history-title">
+        <div class="panel-heading">
+          <div>
+            <p class="step-label">运行档案</p>
+            <h2 id="history-title">最近运行</h2>
+            <p class="history-intro">保存在本机的最近 10 条安全测试结果。</p>
+          </div>
+          <button id="refresh-history" class="button button-secondary" type="button">
+            刷新记录
+          </button>
+        </div>
+
+        <div
+          id="history-status"
+          class="history-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          正在加载最近运行…
+        </div>
+        <ul id="history-list" class="history-list" aria-label="最近测试运行"></ul>
+      </section>
+
       <section class="explanation" aria-labelledby="explanation-title">
         <p class="step-label">你正在看到什么？</p>
         <h2 id="explanation-title">一次确定性的接口测试工作流</h2>

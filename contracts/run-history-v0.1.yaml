@@ -1,0 +1,128 @@
+version: 0.1.0
+status: frozen
+owner: main-agent
+frozen_at: 2026-07-25
+
+purpose:
+  - persist safe API test results locally
+  - list recent runs
+  - retrieve one complete safe run
+
+compatibility:
+  post_path_unchanged: /api/v1/runs
+  post_request_unchanged: true
+  existing_response_fields_unchanged: true
+  additive_response_fields:
+    - run_id
+    - created_at
+
+metadata:
+  run_id:
+    type: UUIDv4
+    generated_by: application
+    unpredictable: true
+  created_at:
+    type: timezone-aware UTC datetime
+    meaning: result creation time after execution
+
+storage:
+  engine: Python stdlib sqlite3
+  production_dependency_added: false
+  path: .data/run-history.sqlite3
+  path_configurable: false
+  git_ignored: true
+  schema_version: 1
+  max_records: 500
+  connection_per_operation: true
+  journal_mode: WAL
+  busy_timeout_ms: 5000
+  ordering:
+    primary: created_at DESC
+    tie_breaker: internal sequence DESC
+  persisted_data:
+    - TestRunResult after secret redaction
+    - summary counters
+  forbidden_data:
+    - base_url
+    - request headers
+    - query parameters
+    - request JSON body
+    - run variable context
+    - raw network or SQLite errors
+
+api:
+  create:
+    method: POST
+    path: /api/v1/runs
+    behavior:
+      - execute test run
+      - save passed, failed and skipped results
+      - return saved result with metadata
+    validation_or_target_rejection_saved: false
+    persistence_failure:
+      status: 503
+      code: HISTORY_PERSISTENCE_FAILED
+      note: target requests may already have executed
+  list:
+    method: GET
+    path: /api/v1/runs
+    query:
+      limit:
+        default: 20
+        minimum: 1
+        maximum: 100
+    response:
+      fields:
+        - items
+        - limit
+        - total
+      items_are_summaries: true
+      cases_included: false
+  detail:
+    method: GET
+    path: /api/v1/runs/{run_id}
+    response: complete persisted TestRunResult
+    malformed_or_missing:
+      status: 404
+      code: RUN_NOT_FOUND
+  storage_read_failure:
+    status: 503
+    code: HISTORY_STORAGE_UNAVAILABLE
+    raw_error_returned: false
+
+models:
+  summary_fields:
+    - run_id
+    - created_at
+    - passed
+    - total
+    - passed_count
+    - failed_count
+    - skipped_count
+    - duration_ms
+
+frontend:
+  section: recent runs
+  default_limit: 10
+  same_origin_requests_only: true
+  actions:
+    - refresh list
+    - open detail
+  states:
+    - loading
+    - empty
+    - success
+    - list_error
+    - detail_error
+  safe_rendering:
+    text_content_only: true
+    browser_storage: forbidden
+
+security:
+  local_single_user_only: true
+  authentication_added: false
+  sql_parameters_required: true
+  absolute_database_path_in_errors: forbidden
+  raw_sqlite_error_in_responses: forbidden
+  known_boundary: undeclared assertion values may be persisted
+

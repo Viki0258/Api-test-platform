@@ -14,6 +14,8 @@
 - 支持显式 `depends_on` 依赖；前序失败时跳过依赖用例，独立用例继续执行
 - 缺失变量、提取失败和网络异常返回结构化错误
 - 结果只报告成功提取的变量名，不返回变量值或完整请求头
+- 使用项目内 SQLite 保存已脱敏运行结果，支持最近记录和详情查询
+- 每次运行返回 UUIDv4 `run_id` 和 UTC `created_at`
 - 默认拒绝所有网络目标；本地目标和其他目标都必须显式允许
 - 提供中文可视化控制台、Swagger UI、演示接口和自动化测试
 
@@ -69,11 +71,22 @@ uvicorn app.main:app --app-dir src --reload
 1. 打开根页面 `/`。页面默认载入使用当前 origin 的安全两用例演示。
 2. 保持“被测服务地址”为当前页面地址，点击“运行测试”。
 3. 在“运行结果”查看总数、通过、失败、跳过以及每条用例的响应时间、断言和提取变量名。
-4. 点击“加载演示”可恢复默认链路；展开“高级设置：查看或编辑 JSON”可以检查或修改请求。
+4. 在“最近运行”查看本机保存的记录，点击任意记录可重新打开完整安全结果。
+5. 点击“加载演示”可恢复默认链路；展开“高级设置：查看或编辑 JSON”可以检查或修改请求。
 
 控制台调用的仍是 `/api/v1/runs`，不会绕过目标访问策略。运行默认本地链路前，启动服务的
 PowerShell 窗口仍必须设置 `$env:ALLOW_LOCAL_TARGETS = 'true'`；否则页面会显示目标不允许的错误。
 Swagger 调试入口继续保留在 `/docs`。
+
+### 运行历史 API
+
+- `GET /api/v1/runs?limit=20`：按时间倒序返回运行摘要，`limit` 范围为1～100。
+- `GET /api/v1/runs/{run_id}`：返回一条已保存的完整安全结果。
+
+历史数据库固定保存在 `.data/run-history.sqlite3`，最多保留500条，并已被 Git 忽略。平台只保存
+已经过脱敏的 `TestRunResult`，不会保存 `base_url`、请求头、查询参数、请求体或运行变量上下文。
+未声明为 secret 的断言值仍可能进入历史，因此测试令牌等敏感变量必须加入 `secret_variables`。
+SQLite 历史只适合本机单用户演示，不应当作生产数据库使用。
 
 如果更习惯命令行，也可以在另一个 PowerShell 窗口执行演示测试：
 
@@ -175,7 +188,7 @@ $env:ALLOWED_TARGET_ORIGINS = 'https://api.example.test,http://192.0.2.10:8080'
 .\.venv\Scripts\python.exe .\scripts\validate_workspace.py
 ```
 
-本阶段主 Agent 已确认全量测试为 `64 passed`，分支覆盖率为 `92%`。后续代码变化后应重新执行
+本阶段主 Agent 已确认全量测试为 `99 passed`，分支覆盖率为 `92%`。后续代码变化后应重新执行
 上述命令，并以当前工作区输出为准。
 
 ## 多 Agent 协作
@@ -202,7 +215,7 @@ $env:ALLOWED_TARGET_ORIGINS = 'https://api.example.test,http://192.0.2.10:8080'
 
 1. YAML/JSON 用例文件导入、环境配置和更完整的密钥管理
 2. 测试数据准备与清理
-3. SQLite/PostgreSQL 持久化、任务历史和 HTML/Allure 报告
+3. HTML/Allure 报告导出和历史筛选
 4. OpenAPI 文档导入与基础用例生成
 5. GitHub Actions、Docker Compose 和独立演示被测服务
 6. 大模型辅助边界场景生成及失败日志总结
