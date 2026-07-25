@@ -1,0 +1,39 @@
+# 仅在当前可信项目中生效。
+approval_policy = "on-request"
+approvals_reviewer = "user"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+allow_login_shell = false
+
+[sandbox_workspace_write]
+network_access = false
+
+[shell_environment_policy]
+# 只继承运行工具所需的核心变量，避免把登录会话中的云凭据带给子进程。
+inherit = "core"
+ignore_default_excludes = false
+exclude = [
+    "*PASSWORD*",
+    "*PASSWD*",
+    "*COOKIE*",
+    "*CREDENTIAL*",
+    "AWS_*",
+    "AZURE_*",
+    "GITHUB_*",
+    "GH_TOKEN",
+    "GOOGLE_*",
+    "OPENAI_*",
+]
+
+[apps._default]
+# 连接器读取可按正常策略执行；写操作必须进入用户审批。
+approvals_reviewer = "user"
+default_tools_approval_mode = "writes"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4
+interrupt_message = true
+
+[features]
+multi_agent = true

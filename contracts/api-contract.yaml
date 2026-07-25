@@ -1,0 +1,39 @@
+version: 0.1.0
+status: template
+owner: main-agent
+
+# 使用前复制或替换本文件；契约由主 Agent 维护。
+endpoint:
+  method: PATCH
+  path: /api/example
+
+authentication:
+  required: true
+  rule: caller may only modify resources they own
+
+request:
+  content_type: application/json
+  body:
+    exampleField:
+      type: string
+      required: true
+
+response:
+  success_status: 200
+  body:
+    id:
+      type: string
+    exampleField:
+      type: string
+
+errors:
+  - status: 400
+    code: INVALID_INPUT
+  - status: 401
+    code: UNAUTHENTICATED
+  - status: 403
+    code: FORBIDDEN
+
+compatibility:
+  breaking_changes_require_user_approval: true
+

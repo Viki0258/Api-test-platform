@@ -1,0 +1,183 @@
+# 这些规则只约束需要在沙箱外运行的命令。
+# 项目 AGENTS.md 同时要求在执行前建立审批卡。
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "向远端推送会改变共享状态，必须由用户批准。",
+    match = [
+        "git push origin main",
+        "git push --force-with-lease origin feature",
+    ],
+    not_match = [
+        "git status",
+        "git diff",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "prompt",
+    justification = "硬重置可能永久丢失本地改动，必须由用户批准。",
+    match = [
+        "git reset --hard",
+        "git reset --hard HEAD~1",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "prompt",
+    justification = "清理未跟踪文件可能删除不可恢复内容，必须由用户批准。",
+    match = [
+        "git clean -fd",
+        "git clean -fdx",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "branch", "-D"],
+    decision = "prompt",
+    justification = "强制删除分支必须由用户批准。",
+    match = [
+        "git branch -D feature",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "tag"],
+    decision = "prompt",
+    justification = "创建或删除发布标签会影响发布流程，必须由用户批准。",
+    match = [
+        "git tag v1.0.0",
+        "git tag -d v1.0.0",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", ["create", "merge", "close"]],
+    decision = "prompt",
+    justification = "创建、合并或关闭 PR 会改变外部共享状态，必须由用户批准。",
+    match = [
+        "gh pr create --title feature",
+        "gh pr merge 42",
+        "gh pr close 42",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "release"],
+    decision = "prompt",
+    justification = "发布操作必须由用户批准。",
+    match = [
+        "gh release create v1.0.0",
+        "gh release delete v1.0.0",
+    ],
+)
+
+prefix_rule(
+    pattern = [["npm", "pnpm"], "publish"],
+    decision = "prompt",
+    justification = "发布软件包是外部且难以完全撤销的操作，必须由用户批准。",
+    match = [
+        "npm publish",
+        "pnpm publish --access public",
+    ],
+)
+
+prefix_rule(
+    pattern = ["yarn", "npm", "publish"],
+    decision = "prompt",
+    justification = "发布软件包是外部且难以完全撤销的操作，必须由用户批准。",
+    match = [
+        "yarn npm publish",
+    ],
+)
+
+prefix_rule(
+    pattern = ["cargo", "publish"],
+    decision = "prompt",
+    justification = "发布 Rust 软件包必须由用户批准。",
+    match = [
+        "cargo publish",
+    ],
+)
+
+prefix_rule(
+    pattern = ["dotnet", "nuget", "push"],
+    decision = "prompt",
+    justification = "发布 NuGet 制品必须由用户批准。",
+    match = [
+        "dotnet nuget push package.nupkg",
+    ],
+)
+
+prefix_rule(
+    pattern = ["twine", "upload"],
+    decision = "prompt",
+    justification = "上传 Python 软件包必须由用户批准。",
+    match = [
+        "twine upload dist/package.whl",
+    ],
+)
+
+prefix_rule(
+    pattern = ["docker", "push"],
+    decision = "prompt",
+    justification = "推送容器镜像会改变外部制品仓库，必须由用户批准。",
+    match = [
+        "docker push registry.example.com/app:latest",
+    ],
+)
+
+prefix_rule(
+    pattern = ["kubectl", ["apply", "delete", "rollout", "scale"]],
+    decision = "prompt",
+    justification = "集群变更必须由用户批准。",
+    match = [
+        "kubectl apply -f deployment.yaml",
+        "kubectl delete deployment app",
+        "kubectl rollout restart deployment app",
+        "kubectl scale deployment app --replicas 3",
+    ],
+)
+
+prefix_rule(
+    pattern = ["terraform", ["apply", "destroy", "import"]],
+    decision = "prompt",
+    justification = "基础设施变更可能产生费用或破坏资源，必须由用户批准。",
+    match = [
+        "terraform apply",
+        "terraform destroy",
+        "terraform import aws_s3_bucket.example bucket",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout", "--"],
+    decision = "prompt",
+    justification = "覆盖工作区文件可能丢失本地改动，必须由用户批准。",
+    match = [
+        "git checkout -- app.py",
+    ],
+)
+
+prefix_rule(
+    pattern = ["git", ["restore", "rm"]],
+    decision = "prompt",
+    justification = "恢复或删除文件可能丢失本地改动，必须由用户批准。",
+    match = [
+        "git restore app.py",
+        "git rm app.py",
+    ],
+)
+
+prefix_rule(
+    pattern = [["vercel", "netlify"], ["deploy", "prod"]],
+    decision = "prompt",
+    justification = "外部部署必须由用户批准。",
+    match = [
+        "vercel deploy --prod",
+        "netlify deploy --prod",
+    ],
+)

@@ -1,0 +1,84 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "variables": {
+    "expected_user_id": 7,
+    "expected_user_name": "demo-user",
+    "run_label": "local-showcase"
+  },
+  "secret_variables": [],
+  "cases": [
+    {
+      "id": "fetch_user",
+      "name": "查询用户并提取链路变量",
+      "method": "GET",
+      "path": "/api/v1/demo/users/{{expected_user_id}}",
+      "headers": {
+        "X-Demo-Run": "{{run_label}}"
+      },
+      "query": {},
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        },
+        {
+          "type": "json_equals",
+          "path": "data.id",
+          "expected": "{{expected_user_id}}"
+        },
+        {
+          "type": "json_equals",
+          "path": "data.name",
+          "expected": "{{expected_user_name}}"
+        }
+      ],
+      "extract": [
+        {
+          "name": "user_id",
+          "path": "data.id",
+          "secret": false
+        },
+        {
+          "name": "user_name",
+          "path": "data.name",
+          "secret": false
+        }
+      ]
+    },
+    {
+      "id": "verify_extracted_user",
+      "name": "复用提取变量验证依赖链",
+      "method": "GET",
+      "path": "/api/v1/demo/users/{{user_id}}",
+      "headers": {
+        "X-Demo-User": "{{user_name}}"
+      },
+      "query": {
+        "source_user_id": "{{user_id}}"
+      },
+      "depends_on": [
+        "fetch_user"
+      ],
+      "assertions": [
+        {
+          "type": "status_code",
+          "expected": 200
+        },
+        {
+          "type": "json_equals",
+          "path": "data.id",
+          "expected": "{{user_id}}"
+        },
+        {
+          "type": "json_equals",
+          "path": "data.name",
+          "expected": "{{user_name}}"
+        },
+        {
+          "type": "response_time_ms",
+          "expected": 1000
+        }
+      ]
+    }
+  ]
+}

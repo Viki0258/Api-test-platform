@@ -1,0 +1,127 @@
+version: 0.2.0
+status: frozen
+owner: main-agent
+frozen_at: 2026-07-25
+
+purpose:
+  - sequential API workflow execution
+  - run-scoped variables
+  - JSON response extraction
+  - deterministic dependency handling
+  - safe local-only target policy by default
+
+compatibility:
+  existing_fields_remain_supported: true
+  case_id_optional: true
+  generated_case_id_format: case_{one_based_index}
+  breaking_changes_require_user_approval: true
+
+request:
+  base_url:
+    type: http_url
+    credentials_forbidden: true
+    fragment_forbidden: true
+    target_policy:
+      default: deny
+      allowed_origins_env: ALLOWED_TARGET_ORIGINS
+      local_targets_env: ALLOW_LOCAL_TARGETS
+      local_targets_default: false
+      allowed_local_hosts:
+        - localhost
+        - 127.0.0.1
+        - "::1"
+  variables:
+    type: object
+    default: {}
+    name_pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    scope: one_run
+  secret_variables:
+    type: array
+    default: []
+    rule: each name must exist in variables
+  cases:
+    min_items: 1
+    max_items: 50
+
+case:
+  id:
+    type: string
+    required: false
+    pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+    uniqueness: one_run
+  depends_on:
+    type: array
+    default: []
+    rule: dependencies must be unique existing earlier case ids
+  templates:
+    syntax: "{{variable_name}}"
+    supported_locations:
+      - path
+      - header values
+      - query values
+      - json body values
+      - assertion expected
+    object_keys_are_rendered: false
+    exact_placeholder_preserves_json_type: true
+    embedded_placeholder_accepts_scalars_only: true
+    escaping_supported: false
+    missing_variable:
+      status: failed
+      error_code: VARIABLE_NOT_FOUND
+      request_sent: false
+  extract:
+    type: array
+    default: []
+    rule:
+      fields:
+        name: variable name
+        path: dot-separated JSON path with numeric list indexes
+        secret: boolean, default false
+      source: response_json
+      overwrite_existing: false
+      required: true
+      failure_error_code: EXTRACTION_FAILED
+      publish_only_when_case_passes: true
+
+execution:
+  order: submitted_order
+  dependency_failure:
+    status: skipped
+    error_code: DEPENDENCY_FAILED
+    request_sent: false
+  independent_cases_continue_after_failure: true
+  redirects: disabled
+  trust_environment_proxy: false
+  network_errors:
+    raw_exception_returned: false
+    stable_codes:
+      - CONNECT_FAILED
+      - REQUEST_TIMEOUT
+      - NETWORK_ERROR
+  run_budget_seconds_default: 30
+
+response:
+  case_statuses:
+    - passed
+    - failed
+    - skipped
+  backward_compatible_passed_boolean: true
+  counts:
+    - total
+    - passed_count
+    - failed_count
+    - skipped_count
+  extracted_variables:
+    values_returned: false
+    names_returned: true
+  sensitive_data:
+    secret_values_returned: false
+    request_headers_returned: false
+    raw_network_errors_returned: false
+    redaction_marker: "[REDACTED]"
+
+validation:
+  invalid_run_structure: http_422
+  disallowed_target: http_422
+  json_equals_requires_path: true
+

@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="智能接口自动化测试与质量平台的本地可视化控制台"
+    >
+    <title>接口测试控制台</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="site-header">
+      <div class="shell header-content">
+        <a class="brand" href="/" aria-label="接口测试控制台首页">
+          <span class="brand-mark" aria-hidden="true">AT</span>
+          <span>
+            <strong>接口测试控制台</strong>
+            <small>API Test Platform</small>
+          </span>
+        </a>
+        <span class="environment-badge">本地演示</span>
+      </div>
+    </header>
+
+    <main id="main-content" class="shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">两步接口链路 · 一键验证</p>
+          <h1 id="page-title">不用手写请求，也能看懂接口测试</h1>
+          <p class="hero-copy">
+            演示用例会先查询用户并提取变量，再将变量交给下一条用例。
+            平台负责发送请求、检查断言并汇总结果。
+          </p>
+        </div>
+        <div class="flow-card" aria-label="测试执行流程">
+          <span>发送请求</span>
+          <span aria-hidden="true">→</span>
+          <span>提取变量</span>
+          <span aria-hidden="true">→</span>
+          <span>验证结果</span>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <section class="panel configuration" aria-labelledby="config-title">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">步骤 01</p>
+              <h2 id="config-title">运行配置</h2>
+            </div>
+            <button id="restore-demo" class="button button-secondary" type="button">
+              加载演示
+            </button>
+          </div>
+
+          <label class="field" for="base-url">
+            <span>被测服务地址</span>
+            <input
+              id="base-url"
+              name="base-url"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              aria-describedby="base-url-help"
+            >
+          </label>
+          <p id="base-url-help" class="field-help">
+            默认使用当前页面地址。本地演示需在启动服务前设置
+            <code>ALLOW_LOCAL_TARGETS=true</code>。
+          </p>
+
+          <div class="overview-heading">
+            <div>
+              <h3>测试用例</h3>
+              <p id="case-count" class="muted"></p>
+            </div>
+          </div>
+          <ol id="case-overview" class="case-overview" aria-label="待运行测试用例"></ol>
+
+          <details id="advanced-panel" class="advanced">
+            <summary>高级设置：查看或编辑 JSON</summary>
+            <div class="advanced-content">
+              <label for="json-editor">
+                请求 JSON
+                <span class="sr-only">修改后将按此内容运行</span>
+              </label>
+              <textarea
+                id="json-editor"
+                rows="18"
+                spellcheck="false"
+                aria-describedby="json-help"
+              ></textarea>
+              <p id="json-help" class="field-help">
+                适合熟悉接口契约的用户。恢复演示会清除这里的修改。
+              </p>
+            </div>
+          </details>
+
+          <div class="action-row">
+            <button id="run-tests" class="button button-primary" type="button">
+              <span class="button-label">运行测试</span>
+              <span class="button-spinner" aria-hidden="true"></span>
+            </button>
+            <p class="privacy-note">数据仅发送到当前页面的同源接口，不在浏览器中保存。</p>
+          </div>
+
+          <div
+            id="run-status"
+            class="status-message"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            准备就绪，点击按钮开始运行。
+          </div>
+        </section>
+
+        <section class="panel results-panel" aria-labelledby="results-title">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">步骤 02</p>
+              <h2 id="results-title">运行结果</h2>
+            </div>
+            <span id="overall-status" class="result-badge result-idle">等待运行</span>
+          </div>
+
+          <div id="empty-result" class="empty-state">
+            <div class="empty-icon" aria-hidden="true">✓</div>
+            <h3>结果将在这里呈现</h3>
+            <p>运行后可以查看通过数、失败数、耗时、每项断言和变量提取情况。</p>
+          </div>
+
+          <div id="result-content" hidden>
+            <dl class="summary-grid" aria-label="测试结果汇总">
+              <div>
+                <dt>用例总数</dt>
+                <dd id="summary-total">0</dd>
+              </div>
+              <div class="summary-passed">
+                <dt>通过</dt>
+                <dd id="summary-passed">0</dd>
+              </div>
+              <div class="summary-failed">
+                <dt>失败</dt>
+                <dd id="summary-failed">0</dd>
+              </div>
+              <div class="summary-skipped">
+                <dt>跳过</dt>
+                <dd id="summary-skipped">0</dd>
+              </div>
+            </dl>
+
+            <p id="duration" class="duration"></p>
+            <div id="case-results" class="case-results"></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="explanation" aria-labelledby="explanation-title">
+        <p class="step-label">你正在看到什么？</p>
+        <h2 id="explanation-title">一次确定性的接口测试工作流</h2>
+        <div class="explanation-grid">
+          <article>
+            <span>1</span>
+            <h3>查询与断言</h3>
+            <p>第一条用例请求演示用户，检查状态码、用户编号和名称。</p>
+          </article>
+          <article>
+            <span>2</span>
+            <h3>提取与传递</h3>
+            <p>从响应中提取变量，由依赖关系安全传递给下一条用例。</p>
+          </article>
+          <article>
+            <span>3</span>
+            <h3>汇总与定位</h3>
+            <p>逐项展示断言和结构化错误，帮助快速定位失败原因。</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell">
+        <p>智能接口自动化测试与质量平台 · 本地开发控制台</p>
+      </div>
+    </footer>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

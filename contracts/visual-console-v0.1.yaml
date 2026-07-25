@@ -1,0 +1,73 @@
+version: 0.1.0
+status: frozen
+owner: main-agent
+frozen_at: 2026-07-25
+
+purpose:
+  - provide a beginner-friendly Chinese interface for the existing v0.2 API
+  - demonstrate variables, extraction, dependencies and assertion results
+
+delivery:
+  frontend_path: frontend/
+  framework: none
+  external_assets: forbidden
+  production_dependencies: none
+  entry_route: /
+  static_route: /static
+
+backend:
+  existing_api_contract_unchanged: true
+  routes:
+    - method: GET
+      path: /
+      response: frontend/index.html
+    - method: POST
+      path: /api/v1/runs
+      response: contracts/test-run-v0.2.yaml
+
+interface:
+  language: zh-CN
+  default_base_url: current browser origin
+  sections:
+    - project explanation
+    - run configuration
+    - test case overview
+    - run action
+    - summary result
+    - per-case details
+  actions:
+    load_demo: restore a safe two-case demo payload
+    run_tests: POST the payload to /api/v1/runs
+    show_json: toggle advanced JSON editor
+  states:
+    - idle
+    - loading
+    - success
+    - partial_or_failed
+    - request_error
+
+security:
+  requests_same_origin_only: true
+  no_secret_storage: true
+  no_local_storage: true
+  render_untrusted_values_with_text_content: true
+  no_inner_html_for_api_values: true
+  no_external_scripts_fonts_or_styles: true
+  local_demo_requires: ALLOW_LOCAL_TARGETS=true
+
+accessibility:
+  keyboard_usable: true
+  visible_focus: true
+  status_region: aria-live
+  color_not_sole_status_indicator: true
+  responsive_min_width_px: 320
+
+acceptance:
+  - root route returns the Chinese console
+  - demo payload validates against TestRunRequest
+  - one click executes the two-case local workflow
+  - summary displays total, passed, failed and skipped
+  - each case displays status, response time, assertions and safe errors
+  - loading and request errors are clearly visible
+  - existing API tests remain green
+
