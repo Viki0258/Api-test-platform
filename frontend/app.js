@@ -19,6 +19,9 @@ const elements = {
   summarySkipped: document.querySelector("#summary-skipped"),
   duration: document.querySelector("#duration"),
   caseResults: document.querySelector("#case-results"),
+  refreshHistory: document.querySelector("#refresh-history"),
+  historyStatus: document.querySelector("#history-status"),
+  historyList: document.querySelector("#history-list"),
 };
 
 const assertionNames = {
@@ -241,7 +244,33 @@ function describeApiError(data, status) {
   if (data && typeof data.detail === "string") {
     return data.detail;
   }
+  if (
+    data &&
+    data.detail &&
+    typeof data.detail === "object" &&
+    typeof data.detail.message === "string"
+  ) {
+    const code =
+      typeof data.detail.code === "string" ? `${data.detail.code}：` : "";
+    return `${code}${data.detail.message}`;
+  }
   return `服务返回 HTTP ${status}，请检查请求配置。`;
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
 }
 
 function valuePreview(value) {
@@ -358,9 +387,14 @@ function renderResult(result) {
   elements.summaryFailed.textContent = String(result.failed_count ?? 0);
   elements.summarySkipped.textContent = String(result.skipped_count ?? 0);
   const duration = Number(result.duration_ms);
-  elements.duration.textContent = Number.isFinite(duration)
-    ? `本次运行耗时 ${duration.toFixed(1)} ms`
-    : "本次运行耗时未知";
+  const durationText = Number.isFinite(duration)
+    ? `耗时 ${duration.toFixed(1)} ms`
+    : "耗时未知";
+  const createdText = result.created_at
+    ? ` · ${formatDate(result.created_at)}`
+    : "";
+  const idText = result.run_id ? ` · ID ${String(result.run_id)}` : "";
+  elements.duration.textContent = `${durationText}${createdText}${idText}`;
 
   const overallPassed = Boolean(result.passed);
   elements.overallStatus.className = `result-badge ${
@@ -429,6 +463,7 @@ async function runTests() {
       throw new Error(describeApiError(data, response.status));
     }
     renderResult(data);
+    void loadHistory();
   } catch (error) {
     resetResults();
     elements.overallStatus.className = "result-badge status-failed";
@@ -441,6 +476,166 @@ async function runTests() {
     );
   } finally {
     setLoading(false);
+  }
+}
+
+function setHistoryStatus(message, type) {
+  elements.historyStatus.className = "history-status";
+  if (type === "error") {
+    elements.historyStatus.classList.add("status-error");
+  }
+  elements.historyStatus.textContent = message;
+}
+
+function setHistoryLoading(isLoading) {
+  elements.refreshHistory.disabled = isLoading;
+  elements.refreshHistory.textContent = isLoading ? "正在刷新…" : "刷新记录";
+  elements.refreshHistory.setAttribute("aria-busy", String(isLoading));
+}
+
+function renderHistoryItem(item) {
+  const safeItem = item && typeof item === "object" ? item : {};
+  const listItem = makeElement("li", "history-item");
+  const button = makeElement("button", "history-button");
+  button.type = "button";
+  button.setAttribute(
+    "aria-label",
+    `查看 ${formatDate(safeItem.created_at)} 的运行详情`,
+  );
+
+  const main = makeElement("span", "history-main");
+  main.append(
+    makeElement("span", "history-date", formatDate(safeItem.created_at)),
+    makeElement("span", "history-id", safeItem.run_id || "运行 ID 未知"),
+  );
+  const counts = makeElement("span", "history-counts");
+  counts.append(
+    makeElement("span", "", `总数 ${safeItem.total ?? 0}`),
+    makeElement("span", "", `通过 ${safeItem.passed_count ?? 0}`),
+    makeElement("span", "", `失败 ${safeItem.failed_count ?? 0}`),
+    makeElement("span", "", `跳过 ${safeItem.skipped_count ?? 0}`),
+  );
+  main.append(counts);
+
+  const side = makeElement("span", "history-side");
+  const passed = Boolean(safeItem.passed);
+  side.append(
+    makeElement(
+      "span",
+      `case-status ${passed ? "status-passed" : "status-failed"}`,
+      passed ? "通过" : "未通过",
+    ),
+    makeElement(
+      "span",
+      "response-time",
+      Number.isFinite(Number(safeItem.duration_ms))
+        ? `${Number(safeItem.duration_ms).toFixed(1)} ms`
+        : "无耗时",
+    ),
+  );
+  button.append(main, side);
+  button.addEventListener("click", () => {
+    void loadHistoryDetail(safeItem.run_id, button);
+  });
+  listItem.append(button);
+  return listItem;
+}
+
+function renderHistoryList(data) {
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  if (items.length === 0) {
+    replaceChildren(elements.historyList, [
+      makeElement(
+        "li",
+        "history-empty",
+        "还没有运行记录。完成一次测试后，记录会出现在这里。",
+      ),
+    ]);
+    setHistoryStatus("历史记录为空。", "idle");
+    return;
+  }
+
+  replaceChildren(elements.historyList, items.map(renderHistoryItem));
+  const total = Number.isFinite(Number(data.total)) ? Number(data.total) : items.length;
+  setHistoryStatus(`已显示最近 ${items.length} 条，共保存 ${total} 条。`, "idle");
+}
+
+async function loadHistory() {
+  setHistoryLoading(true);
+  setHistoryStatus("正在加载最近运行…", "idle");
+  try {
+    const response = await fetch("/api/v1/runs?limit=10", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`服务返回 HTTP ${response.status}，但响应不是有效 JSON。`);
+    }
+    if (!response.ok) {
+      throw new Error(describeApiError(data, response.status));
+    }
+    renderHistoryList(data);
+  } catch (error) {
+    replaceChildren(elements.historyList, []);
+    setHistoryStatus(
+      error instanceof Error
+        ? `无法加载历史：${error.message}`
+        : "无法加载历史，请稍后重试。",
+      "error",
+    );
+  } finally {
+    setHistoryLoading(false);
+  }
+}
+
+async function loadHistoryDetail(runId, button) {
+  if (typeof runId !== "string" || !runId) {
+    setHistoryStatus("这条记录缺少有效运行 ID，无法打开。", "error");
+    return;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  setHistoryStatus("正在加载运行详情…", "idle");
+  try {
+    const response = await fetch(`/api/v1/runs/${encodeURIComponent(runId)}`, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`服务返回 HTTP ${response.status}，但响应不是有效 JSON。`);
+    }
+    if (!response.ok) {
+      throw new Error(describeApiError(data, response.status));
+    }
+    renderResult(data);
+    setRunStatus(`已打开 ${formatDate(data.created_at)} 的历史运行。`, "success");
+    setHistoryStatus("历史详情已显示在“运行结果”区域。", "idle");
+    document.querySelector("#results-title").scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  } catch (error) {
+    setHistoryStatus(
+      error instanceof Error
+        ? `无法打开详情：${error.message}`
+        : "无法打开详情，请稍后重试。",
+      "error",
+    );
+  } finally {
+    button.disabled = false;
+    button.setAttribute("aria-busy", "false");
   }
 }
 
@@ -467,5 +662,7 @@ elements.jsonEditor.addEventListener("change", () => {
 
 elements.restoreDemo.addEventListener("click", restoreDemo);
 elements.runTests.addEventListener("click", runTests);
+elements.refreshHistory.addEventListener("click", loadHistory);
 
 restoreDemo();
+void loadHistory();

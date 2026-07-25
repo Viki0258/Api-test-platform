@@ -126,3 +126,149 @@ def test_frontend_has_no_external_resource_or_network_reference() -> None:
 
     assert not re.search(r"""(?:https?:)?//[A-Za-z0-9]""", source)
     assert "@import" not in source
+
+
+def test_console_exposes_recent_run_dom_and_accessible_status_contracts() -> None:
+    html = client.get("/").text
+
+    assert 'id="recent-runs"' in html
+    assert 'id="history-title"' in html
+    assert "最近运行" in html
+    assert re.search(
+        r"""<button\b[^>]*\bid=["']refresh-history["'][^>]*>"""
+        r"\s*刷新记录\s*</button>",
+        html,
+    )
+    assert re.search(
+        r"""<div\b[^>]*\bid=["']history-status["'][^>]*"""
+        r"""\brole=["']status["'][^>]*"""
+        r"""\baria-live=["']polite["']""",
+        html,
+    )
+    assert re.search(
+        r"""<ul\b[^>]*\bid=["']history-list["'][^>]*"""
+        r"""\baria-label=["']最近测试运行["']""",
+        html,
+    )
+
+
+def test_history_initial_load_and_refresh_use_the_same_origin_list_api() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"""fetch\s*\(\s*["']/api/v1/runs\?limit=10["']\s*,\s*\{"""
+        r"""(?:(?!\}\s*\)).)*method\s*:\s*["']GET["']"""
+        r"""(?:(?!\}\s*\)).)*credentials\s*:\s*["']same-origin["']""",
+        javascript,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"""refreshHistory\.addEventListener\s*\(\s*["']click["']"""
+        r"""\s*,\s*loadHistory\s*\)""",
+        javascript,
+    )
+    assert re.search(r"\bvoid\s+loadHistory\s*\(\s*\)\s*;", javascript)
+    assert "正在加载最近运行" in javascript
+    assert "正在刷新" in javascript
+
+
+def test_history_click_uses_an_encoded_same_origin_detail_api() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"""addEventListener\s*\(\s*["']click["']\s*,\s*\(\s*\)\s*=>"""
+        r"""(?:(?!\}\s*\)).)*loadHistoryDetail\s*\(""",
+        javascript,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"""fetch\s*\(\s*`/api/v1/runs/\$\{encodeURIComponent\(runId\)\}`"""
+        r"""\s*,\s*\{(?:(?!\}\s*\)).)*method\s*:\s*["']GET["']"""
+        r"""(?:(?!\}\s*\)).)*credentials\s*:\s*["']same-origin["']""",
+        javascript,
+        re.DOTALL,
+    )
+    assert "正在加载运行详情" in javascript
+    assert "历史详情已显示" in javascript
+
+
+def test_history_summary_renders_only_the_frozen_summary_fields() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+
+    for field in (
+        "run_id",
+        "created_at",
+        "passed",
+        "total",
+        "passed_count",
+        "failed_count",
+        "skipped_count",
+        "duration_ms",
+    ):
+        assert re.search(rf"\bsafeItem\.{field}\b", javascript)
+
+    history_renderer = javascript[
+        javascript.index("function renderHistoryItem")
+        : javascript.index("function renderHistoryList")
+    ]
+    for forbidden in (
+        "cases",
+        "headers",
+        "query",
+        "json_body",
+        "variables",
+    ):
+        assert not re.search(rf"\bsafeItem\.{forbidden}\b", history_renderer)
+
+
+def test_history_has_loading_empty_list_error_and_detail_error_states() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+
+    expected_messages = (
+        "正在加载最近运行",
+        "历史记录为空",
+        "还没有运行记录",
+        "无法加载历史",
+        "正在加载运行详情",
+        "无法打开详情",
+        "缺少有效运行 ID",
+    )
+    for message in expected_messages:
+        assert message in javascript
+
+    assert re.search(
+        r"setHistoryLoading\s*\(\s*true\s*\)"
+        r"(?:(?!finally).)*finally\s*\{"
+        r"(?:(?!\}).)*setHistoryLoading\s*\(\s*false\s*\)",
+        javascript,
+        re.DOTALL,
+    )
+    assert re.search(
+        r"button\.disabled\s*=\s*true"
+        r"(?:(?!finally).)*finally\s*\{"
+        r"(?:(?!\}).)*button\.disabled\s*=\s*false",
+        javascript,
+        re.DOTALL,
+    )
+
+
+def test_history_api_values_keep_safe_text_rendering_and_no_browser_storage() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+
+    assert "textContent" in javascript
+    assert "makeElement(" in javascript
+    for forbidden in (
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+    ):
+        assert forbidden not in javascript
+
+    assert not re.search(
+        r"""fetch\s*\(\s*(?:["']https?://|`https?://|["']//|`//)""",
+        javascript,
+    )

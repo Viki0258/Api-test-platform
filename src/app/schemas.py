@@ -1,6 +1,8 @@
 from enum import StrEnum
+from datetime import datetime, timezone
 import re
 from typing import Any
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
@@ -145,6 +147,10 @@ class CaseResult(BaseModel):
 
 
 class TestRunResult(BaseModel):
+    run_id: UUID = Field(default_factory=uuid4)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     passed: bool
     total: int
     passed_count: int
@@ -152,3 +158,34 @@ class TestRunResult(BaseModel):
     skipped_count: int
     duration_ms: float
     cases: list[CaseResult]
+
+    @field_validator("created_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+
+class TestRunSummary(BaseModel):
+    run_id: UUID
+    created_at: datetime
+    passed: bool
+    total: int
+    passed_count: int
+    failed_count: int
+    skipped_count: int
+    duration_ms: float
+
+    @field_validator("created_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+
+class TestRunHistoryList(BaseModel):
+    items: list[TestRunSummary]
+    limit: int
+    total: int

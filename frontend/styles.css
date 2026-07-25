@@ -709,6 +709,122 @@ textarea {
   font-size: 0.72rem;
 }
 
+.history-panel {
+  margin-top: 24px;
+}
+
+.history-panel .panel-heading {
+  align-items: flex-start;
+}
+
+.history-intro {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.history-status {
+  min-height: 1.5rem;
+  margin: -0.75rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.history-status.status-error {
+  color: var(--danger);
+}
+
+.history-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-item {
+  min-width: 0;
+}
+
+.history-button {
+  display: grid;
+  width: 100%;
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.9rem;
+  color: var(--ink);
+  text-align: left;
+  background: #fafbfc;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.history-button:hover {
+  background: #fff;
+  border-color: #aeb8c8;
+  transform: translateY(-1px);
+}
+
+.history-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.history-main {
+  min-width: 0;
+}
+
+.history-date {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 780;
+}
+
+.history-id {
+  display: block;
+  margin-top: 0.08rem;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.7rem;
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.71rem;
+}
+
+.history-side {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.history-empty {
+  grid-column: 1 / -1;
+  padding: 2rem 1rem;
+  color: var(--muted);
+  background: var(--subtle);
+  border: 1px dashed #cfd6e1;
+  border-radius: 11px;
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .explanation {
   padding: 70px 0;
 }
@@ -786,6 +902,10 @@ footer {
   .workspace {
     grid-template-columns: 1fr;
   }
+
+  .history-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 600px) {
@@ -833,6 +953,14 @@ footer {
 
   .panel-heading {
     align-items: flex-start;
+  }
+
+  .history-panel .panel-heading {
+    display: grid;
+  }
+
+  .history-panel .button {
+    width: 100%;
   }
 
   .summary-grid {
