@@ -189,3 +189,22 @@ class TestRunHistoryList(BaseModel):
     items: list[TestRunSummary]
     limit: int
     total: int
+
+
+class OpenApiGenerateRequest(BaseModel):
+    document: dict[str, Any]
+    base_url: str | None = None
+    max_cases: int = Field(default=20, ge=1, le=50)
+
+
+class OpenApiGenerationWarning(BaseModel):
+    location: str
+    code: str
+    message: str
+
+
+class OpenApiGenerateResponse(BaseModel):
+    generated_count: int
+    skipped_count: int
+    warnings: list[OpenApiGenerationWarning]
+    run: TestRunRequest

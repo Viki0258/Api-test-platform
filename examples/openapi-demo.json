@@ -1,0 +1,110 @@
+{
+  "document": {
+    "openapi": "3.0.3",
+    "info": {
+      "title": "Synthetic Booking API",
+      "version": "1.0.0"
+    },
+    "servers": [
+      {
+        "url": "https://api.example.test"
+      }
+    ],
+    "paths": {
+      "/users/{user_id}": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/UserId"
+          }
+        ],
+        "get": {
+          "operationId": "getUser",
+          "summary": "查询虚构用户",
+          "parameters": [
+            {
+              "$ref": "#/components/parameters/IncludeProfile"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Synthetic user response"
+            }
+          }
+        }
+      },
+      "/bookings": {
+        "post": {
+          "operationId": "createBooking",
+          "summary": "创建虚构预订",
+          "requestBody": {
+            "$ref": "#/components/requestBodies/CreateBooking"
+          },
+          "responses": {
+            "201": {
+              "description": "Synthetic booking created"
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "parameters": {
+        "UserId": {
+          "name": "user_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "example": 42
+          }
+        },
+        "IncludeProfile": {
+          "name": "include_profile",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "requestBodies": {
+        "CreateBooking": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BookingInput"
+              }
+            }
+          }
+        }
+      },
+      "schemas": {
+        "BookingInput": {
+          "type": "object",
+          "required": [
+            "hotel_code",
+            "nights"
+          ],
+          "properties": {
+            "hotel_code": {
+              "type": "string",
+              "example": "DEMO-HOTEL-001"
+            },
+            "nights": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 2
+            },
+            "notes": {
+              "type": "string",
+              "example": "synthetic test data"
+            }
+          }
+        }
+      }
+    }
+  },
+  "max_cases": 10
+}

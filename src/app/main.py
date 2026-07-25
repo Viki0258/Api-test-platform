@@ -8,11 +8,17 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings, target_is_allowed
 from app.schemas import (
+    OpenApiGenerateRequest,
+    OpenApiGenerateResponse,
     TestRunHistoryList,
     TestRunRequest,
     TestRunResult,
 )
 from app.services.executor import TestExecutor
+from app.services.openapi_generator import (
+    OpenApiGenerationError,
+    generate_openapi_cases,
+)
 from app.services.run_history import HistoryStorageError, RunHistoryStore
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +61,23 @@ def get_demo_user(user_id: int) -> dict:
             "active": True,
         },
     }
+
+
+@app.post(
+    "/api/v1/openapi/generate",
+    response_model=OpenApiGenerateResponse,
+    tags=["case-generation"],
+)
+def generate_from_openapi(
+    payload: OpenApiGenerateRequest,
+) -> OpenApiGenerateResponse:
+    try:
+        return generate_openapi_cases(payload)
+    except OpenApiGenerationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
 
 
 @app.post("/api/v1/runs", response_model=TestRunResult, tags=["test-runs"])
