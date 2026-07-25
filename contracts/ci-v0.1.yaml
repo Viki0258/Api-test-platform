@@ -1,0 +1,45 @@
+contract: github-actions-ci
+version: "0.1"
+status: frozen
+
+purpose: >
+  在推送到 main、面向 main 的 pull request 和手动触发时，
+  使用 GitHub 托管的 Linux runner 运行项目质量门。
+
+triggers:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: true
+
+security:
+  permissions:
+    contents: read
+  checkout_persist_credentials: false
+  secrets_required: []
+  deploys: false
+  writes_repository: false
+
+runtime:
+  runner: ubuntu-latest
+  python: "3.11"
+  timeout_minutes: 10
+  dependency_group: dev
+
+quality_gates:
+  - name: compile
+    command: python -m compileall -q src tests scripts
+  - name: tests
+    command: >
+      python -m pytest --cov=app --cov-branch --cov-report=term-missing
+      --cov-fail-under=90
+  - name: frontend_syntax
+    command: node --check frontend/app.js
+  - name: workspace
+    command: python scripts/validate_workspace.py
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel_in_progress: true
+

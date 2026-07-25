@@ -182,6 +182,15 @@ $env:ALLOWED_TARGET_ORIGINS = 'https://api.example.test,http://192.0.2.10:8080'
 .\.venv\Scripts\python.exe -m pytest --cov=app
 ```
 
+## GitHub Actions 持续集成
+
+CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时，使用 Python 3.11
+依次执行 Python 编译、全量测试、分支覆盖率不低于 90%、前端 JavaScript 语法检查和
+协作工作区检查。运行结果可在 GitHub 仓库的 **Actions** 页面查看。
+
+本地验证不能替代 GitHub 托管的 Linux 环境；首次真实 CI 结果需要等当前分支推送并触发
+工作流后再确认。
+
 协作工作区检查：
 
 ```powershell
