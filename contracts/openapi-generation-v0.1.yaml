@@ -1,0 +1,120 @@
+contract: openapi-case-generation
+version: "0.1"
+status: frozen
+
+endpoint:
+  method: POST
+  path: /api/v1/openapi/generate
+  tags: [case-generation]
+  network_access: none
+
+request:
+  document:
+    type: object
+    required: true
+    constraints:
+      openapi_versions: ["3.0.x", "3.1.x"]
+      max_serialized_bytes: 1048576
+      max_paths: 200
+  base_url:
+    type: http_url
+    required: false
+    precedence: request override, then document servers[0].url
+    constraints:
+      credentials_forbidden: true
+      fragment_forbidden: true
+      server_variables_forbidden: true
+  max_cases:
+    type: integer
+    default: 20
+    minimum: 1
+    maximum: 50
+
+response:
+  generated_count: integer
+  skipped_count: integer
+  warnings:
+    type: array
+    item:
+      location: string
+      code: string
+      message: string
+  run:
+    type: TestRunRequest
+    defaults:
+      variables: {}
+      secret_variables: []
+
+generation:
+  supported_methods: [get, post, put, patch, delete]
+  ordering: document path order, then supported_methods order
+  case_id:
+    source: operationId, otherwise method plus path
+    normalization: ASCII letters, digits, underscore and hyphen; maximum 64 characters
+    duplicates: append deterministic numeric suffix
+  case_name:
+    source: summary, then operationId, then uppercase method plus path
+  parameters:
+    sources: path item parameters followed by operation parameters
+    operation_override: same name and location replaces path item definition
+    included: required path parameters and required query parameters
+    sample_precedence: parameter example, schema example, schema default, deterministic type fallback
+    path_values: percent encoded and substituted into braces
+  request_body:
+    media_type: application/json only
+    sample_precedence: media example, schema example, recursively generated schema sample
+    recursion_limit: 8
+    maximum_generated_schema_nodes_per_operation: 2048
+    maximum_serialized_case_bytes: 262144
+  assertions:
+    status_code: lowest explicit numeric 2xx response
+  refs:
+    local_components_only: true
+    maximum_depth: 8
+    external: skip affected operation with warning
+  security:
+    credentials_generated: false
+    secured_operations: generated without credentials plus warning
+    security_schemes_ignored: true
+    header_and_cookie_parameters_ignored: true
+    original_document_persisted: false
+    request_body_logged: false
+    warning_values_redacted: true
+
+skip_conditions:
+  - unsupported method
+  - unresolved parameter or request body reference
+  - missing explicit numeric 2xx response
+  - required application/json body cannot be generated
+  - max_cases already reached
+  - generated schema node budget exceeded
+  - serialized case size budget exceeded
+
+errors:
+  invalid_openapi_version:
+    status: 422
+    code: INVALID_OPENAPI_VERSION
+  missing_base_url:
+    status: 422
+    code: OPENAPI_BASE_URL_REQUIRED
+  invalid_base_url:
+    status: 422
+    code: INVALID_OPENAPI_BASE_URL
+  document_too_large:
+    status: 422
+    code: OPENAPI_DOCUMENT_TOO_LARGE
+  too_many_paths:
+    status: 422
+    code: OPENAPI_TOO_MANY_PATHS
+  no_cases_generated:
+    status: 422
+    code: NO_OPENAPI_CASES_GENERATED
+
+non_goals:
+  - fetching OpenAPI documents from URLs
+  - executing generated cases
+  - Swagger 2 conversion
+  - external references
+  - authentication or secret generation
+  - persisting or logging the source document
+  - negative, boundary or AI-generated cases

@@ -12,6 +12,7 @@
 - 支持运行级变量以及 `{{variable_name}}` 模板
 - 支持从前序 JSON 响应提取变量，并在后续路径、请求和断言中复用
 - 支持显式 `depends_on` 依赖；前序失败时跳过依赖用例，独立用例继续执行
+- 支持从 OpenAPI 3.0/3.1 JSON 对象确定性生成基础正向测试用例草稿
 - 缺失变量、提取失败和网络异常返回结构化错误
 - 结果只报告成功提取的变量名，不返回变量值或完整请求头
 - 使用项目内 SQLite 保存已脱敏运行结果，支持最近记录和详情查询
@@ -176,6 +177,35 @@ $env:ALLOWED_TARGET_ORIGINS = 'https://api.example.test,http://192.0.2.10:8080'
 
 完整示例见 [examples/demo-run.json](examples/demo-run.json)。
 
+## 从 OpenAPI 生成基础用例
+
+`POST /api/v1/openapi/generate` 接收 OpenAPI 3.0.x 或 3.1.x 的 JSON 对象，确定性生成一个
+符合现有 `TestRunRequest` 模型的 `run`。当前支持 GET、POST、PUT、PATCH、DELETE，必填的
+路径参数和查询参数、`application/json` 请求体、受限的本地 `#/components/...` 引用，以及
+最低显式数字 2xx 响应的状态码断言。示例值按参数或 Schema 的 `example`、`default` 和
+确定性类型回退规则生成；无法生成的操作会计入 `skipped_count` 并返回结构化 `warnings`。
+
+请求可以提供 `base_url`；省略时使用文档中的第一个 `servers[0].url`。地址不允许包含凭据、
+片段或 server 变量。单次最多生成50条用例；每个 operation 最多生成2048个 Schema 节点，
+单条生成用例的 UTF-8 序列化结果不得超过256 KiB，文档、路径数和本地引用深度也有上限。
+完整的合成示例见 [examples/openapi-demo.json](examples/openapi-demo.json)，可在服务启动后执行：
+
+```powershell
+$generated = Invoke-RestMethod `
+  -Method Post `
+  -Uri 'http://127.0.0.1:8000/api/v1/openapi/generate' `
+  -ContentType 'application/json' `
+  -InFile '.\examples\openapi-demo.json'
+
+$generated | ConvertTo-Json -Depth 20
+```
+
+生成阶段只解析请求中的 JSON，不会联网获取文档、访问 `base_url` 或执行生成的用例。需要执行时，
+应由用户检查生成结果后另行把 `$generated.run` 提交到 `/api/v1/runs`；该请求仍会经过默认拒绝的
+SSRF 目标策略。生成器不读取或生成 `securitySchemes` 凭据，也不持久化原始 OpenAPI 文档；
+输入文档和示例中不得放入真实密钥。本阶段不支持 Swagger 2、外部 `$ref`、认证凭据、
+Header/Cookie 参数、multipart/XML、负向或边界用例生成。
+
 ## 运行自动化测试
 
 ```powershell
@@ -197,7 +227,7 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 .\.venv\Scripts\python.exe .\scripts\validate_workspace.py
 ```
 
-本阶段主 Agent 已确认全量测试为 `99 passed`，分支覆盖率为 `92%`。后续代码变化后应重新执行
+本阶段主 Agent 已确认全量测试为 `145 passed`，分支覆盖率为 `90.52%`。后续代码变化后应重新执行
 上述命令，并以当前工作区输出为准。
 
 ## 多 Agent 协作
@@ -225,6 +255,6 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 1. YAML/JSON 用例文件导入、环境配置和更完整的密钥管理
 2. 测试数据准备与清理
 3. HTML/Allure 报告导出和历史筛选
-4. OpenAPI 文档导入与基础用例生成
+4. OpenAPI 用例生成的边界场景扩展与人工确认流程
 5. GitHub Actions、Docker Compose 和独立演示被测服务
 6. 大模型辅助边界场景生成及失败日志总结
