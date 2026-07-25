@@ -1,0 +1,54 @@
+name: CI
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Python 3.11 quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install development dependencies
+        run: python -m pip install ".[dev]"
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests scripts
+
+      - name: Run tests and enforce branch coverage
+        run: >-
+          python -m pytest
+          --cov=app
+          --cov-branch
+          --cov-report=term-missing
+          --cov-fail-under=90
+
+      - name: Check frontend JavaScript syntax
+        run: node --check frontend/app.js
+
+      - name: Validate collaboration workspace
+        run: python scripts/validate_workspace.py
