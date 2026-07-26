@@ -45,6 +45,143 @@
         </div>
       </section>
 
+      <section
+        id="openapi-generator"
+        class="panel openapi-panel"
+        aria-labelledby="openapi-title"
+      >
+        <div class="panel-heading">
+          <div>
+            <p class="step-label">用例生成</p>
+            <h2 id="openapi-title">从 OpenAPI 生成基础用例</h2>
+            <p class="openapi-intro">
+              粘贴或选择 OpenAPI 3.0/3.1 JSON，先生成可检查的正向用例草稿。
+              生成不会访问被测地址，也不会自动运行测试。
+            </p>
+          </div>
+          <button
+            id="load-openapi-demo"
+            class="button button-secondary"
+            type="button"
+          >
+            加载合成演示
+          </button>
+        </div>
+
+        <div class="openapi-layout">
+          <div class="openapi-inputs">
+            <label class="field" for="openapi-file">
+              <span>选择 JSON 文件</span>
+              <input
+                id="openapi-file"
+                name="openapi-file"
+                type="file"
+                accept=".json,application/json"
+                aria-describedby="openapi-file-help"
+              >
+            </label>
+            <p id="openapi-file-help" class="field-help">
+              文件读取前会检查大小，最大1 MiB。内容只保存在当前页面内存中。
+            </p>
+
+            <label class="field" for="openapi-editor">
+              <span>OpenAPI JSON</span>
+              <textarea
+                id="openapi-editor"
+                rows="18"
+                spellcheck="false"
+                aria-describedby="openapi-editor-help"
+              ></textarea>
+            </label>
+            <p id="openapi-editor-help" class="field-help">
+              仅支持 JSON 对象，不支持 YAML、外部引用或认证凭据生成。请勿放入真实密钥。
+            </p>
+
+            <div class="openapi-options">
+              <label class="field" for="openapi-base-url">
+                <span>被测地址覆盖值（可选）</span>
+                <input
+                  id="openapi-base-url"
+                  name="openapi-base-url"
+                  type="url"
+                  inputmode="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="留空则使用文档首个 server"
+                >
+              </label>
+              <label class="field" for="openapi-max-cases">
+                <span>最大生成用例数</span>
+                <input
+                  id="openapi-max-cases"
+                  name="openapi-max-cases"
+                  type="number"
+                  min="1"
+                  max="50"
+                  step="1"
+                  value="20"
+                >
+              </label>
+            </div>
+
+            <div class="openapi-actions">
+              <button
+                id="generate-openapi"
+                class="button button-primary"
+                type="button"
+              >
+                生成基础用例
+              </button>
+              <button
+                id="apply-generated-run"
+                class="button button-secondary"
+                type="button"
+                disabled
+              >
+                载入测试编辑器
+              </button>
+            </div>
+            <div
+              id="openapi-status"
+              class="status-message"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              可先加载合成演示，再点击“生成基础用例”。
+            </div>
+          </div>
+
+          <div class="openapi-output" aria-labelledby="openapi-output-title">
+            <h3 id="openapi-output-title">生成结果</h3>
+            <dl class="openapi-summary" aria-label="OpenAPI 生成汇总">
+              <div>
+                <dt>已生成</dt>
+                <dd id="openapi-generated-count">0</dd>
+              </div>
+              <div>
+                <dt>已跳过</dt>
+                <dd id="openapi-skipped-count">0</dd>
+              </div>
+            </dl>
+            <div class="openapi-warning-heading">
+              <h4>警告与降级</h4>
+              <p>只显示安全的结构化位置、代码和说明。</p>
+            </div>
+            <ul
+              id="openapi-warnings"
+              class="openapi-warnings"
+              aria-label="OpenAPI 生成警告"
+            >
+              <li class="openapi-empty-warning">尚未生成，没有警告。</li>
+            </ul>
+            <p class="privacy-note openapi-privacy">
+              “载入测试编辑器”只复制草稿并等待人工确认，不会调用运行接口。
+            </p>
+          </div>
+        </div>
+      </section>
+
       <div class="workspace">
         <section class="panel configuration" aria-labelledby="config-title">
           <div class="panel-heading">

@@ -22,7 +22,20 @@ const elements = {
   refreshHistory: document.querySelector("#refresh-history"),
   historyStatus: document.querySelector("#history-status"),
   historyList: document.querySelector("#history-list"),
+  openApiFile: document.querySelector("#openapi-file"),
+  openApiEditor: document.querySelector("#openapi-editor"),
+  openApiBaseUrl: document.querySelector("#openapi-base-url"),
+  openApiMaxCases: document.querySelector("#openapi-max-cases"),
+  loadOpenApiDemo: document.querySelector("#load-openapi-demo"),
+  generateOpenApi: document.querySelector("#generate-openapi"),
+  applyGeneratedRun: document.querySelector("#apply-generated-run"),
+  openApiStatus: document.querySelector("#openapi-status"),
+  openApiGeneratedCount: document.querySelector("#openapi-generated-count"),
+  openApiSkippedCount: document.querySelector("#openapi-skipped-count"),
+  openApiWarnings: document.querySelector("#openapi-warnings"),
 };
+
+const MAX_OPENAPI_FILE_BYTES = 1048576;
 
 const assertionNames = {
   status_code: "状态码",
@@ -122,6 +135,59 @@ function createDemoPayload() {
 }
 
 let payload = createDemoPayload();
+let generatedRun = null;
+let runIsLoading = false;
+let openApiIsLoading = false;
+let openApiRequestSequence = 0;
+let openApiAbortController = null;
+
+function createOpenApiDemo() {
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "本地合成用户接口",
+      version: "1.0.0",
+    },
+    servers: [
+      {
+        url: window.location.origin,
+      },
+    ],
+    paths: {
+      "/api/v1/demo/users/{user_id}": {
+        get: {
+          operationId: "get_demo_user",
+          summary: "查询合成用户",
+          parameters: [
+            {
+              name: "user_id",
+              in: "path",
+              required: true,
+              schema: {
+                type: "integer",
+                example: 7,
+              },
+            },
+            {
+              name: "include_profile",
+              in: "query",
+              required: true,
+              schema: {
+                type: "boolean",
+                default: false,
+              },
+            },
+          ],
+          responses: {
+            200: {
+              description: "合成用户响应",
+            },
+          },
+        },
+      },
+    },
+  };
+}
 
 function makeElement(tag, className, text) {
   const node = document.createElement(tag);
@@ -136,6 +202,395 @@ function makeElement(tag, className, text) {
 
 function replaceChildren(parent, children) {
   parent.replaceChildren(...children);
+}
+
+function setOpenApiStatus(message, type) {
+  elements.openApiStatus.className = "status-message";
+  if (type === "error") {
+    elements.openApiStatus.classList.add("status-error");
+  } else if (type === "success") {
+    elements.openApiStatus.classList.add("status-success");
+  }
+  elements.openApiStatus.textContent = message;
+}
+
+function renderOpenApiWarnings(warnings) {
+  const safeWarnings = Array.isArray(warnings) ? warnings : [];
+  if (safeWarnings.length === 0) {
+    replaceChildren(elements.openApiWarnings, [
+      makeElement("li", "openapi-empty-warning", "没有警告。"),
+    ]);
+    return;
+  }
+
+  const visibleWarnings = safeWarnings.slice(0, 100);
+  const items = visibleWarnings.map((warning) => {
+    const safeWarning =
+      warning && typeof warning === "object" ? warning : {};
+    const item = makeElement("li", "openapi-warning-item");
+    const heading = makeElement(
+      "strong",
+      "",
+      typeof safeWarning.code === "string"
+        ? safeWarning.code
+        : "OPENAPI_WARNING",
+    );
+    const location = makeElement(
+      "span",
+      "openapi-warning-location",
+      typeof safeWarning.location === "string"
+        ? safeWarning.location
+        : "位置未知",
+    );
+    const message = makeElement(
+      "p",
+      "",
+      typeof safeWarning.message === "string"
+        ? safeWarning.message
+        : "该操作未能完整生成。",
+    );
+    item.append(heading, location, message);
+    return item;
+  });
+  if (safeWarnings.length > visibleWarnings.length) {
+    items.push(
+      makeElement(
+        "li",
+        "openapi-empty-warning",
+        `另有 ${safeWarnings.length - visibleWarnings.length} 条警告未展开。`,
+      ),
+    );
+  }
+  replaceChildren(elements.openApiWarnings, items);
+}
+
+function invalidateGeneratedOpenApi(message) {
+  generatedRun = null;
+  elements.applyGeneratedRun.disabled = true;
+  elements.openApiGeneratedCount.textContent = "0";
+  elements.openApiSkippedCount.textContent = "0";
+  replaceChildren(elements.openApiWarnings, [
+    makeElement("li", "openapi-empty-warning", "尚未生成，没有警告。"),
+  ]);
+  if (message) {
+    setOpenApiStatus(message, "idle");
+  }
+}
+
+function syncMutatingControlState() {
+  const busy = runIsLoading || openApiIsLoading;
+  elements.runTests.disabled = busy;
+  elements.restoreDemo.disabled = busy;
+  elements.baseUrl.disabled = busy;
+  elements.jsonEditor.disabled = busy;
+  elements.openApiFile.disabled = busy;
+  elements.openApiEditor.disabled = busy;
+  elements.openApiBaseUrl.disabled = busy;
+  elements.openApiMaxCases.disabled = busy;
+  elements.loadOpenApiDemo.disabled = busy;
+  elements.generateOpenApi.disabled = busy;
+  elements.applyGeneratedRun.disabled = busy || generatedRun === null;
+}
+
+function setOpenApiLoading(isLoading) {
+  openApiIsLoading = isLoading;
+  syncMutatingControlState();
+  elements.generateOpenApi.textContent = isLoading
+    ? "正在生成…"
+    : "生成基础用例";
+  elements.generateOpenApi.setAttribute("aria-busy", String(isLoading));
+}
+
+function loadOpenApiDemo() {
+  elements.openApiEditor.value = JSON.stringify(createOpenApiDemo(), null, 2);
+  elements.openApiBaseUrl.value = "";
+  elements.openApiMaxCases.value = "20";
+  elements.openApiFile.value = "";
+  invalidateGeneratedOpenApi("已加载同源合成演示，尚未生成或运行。");
+}
+
+async function handleOpenApiFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) {
+    return;
+  }
+  invalidateGeneratedOpenApi();
+  if (file.size > MAX_OPENAPI_FILE_BYTES) {
+    elements.openApiFile.value = "";
+    setOpenApiStatus("文件超过1 MiB，未读取任何内容。", "error");
+    return;
+  }
+  const fileName = typeof file.name === "string" ? file.name.toLowerCase() : "";
+  const fileType = typeof file.type === "string" ? file.type.toLowerCase() : "";
+  const hasJsonExtension = fileName.endsWith(".json");
+  const hasJsonMime = fileType === "application/json";
+  if (!hasJsonExtension && !hasJsonMime) {
+    elements.openApiFile.value = "";
+    setOpenApiStatus("请选择扩展名为 .json 的 JSON 文件。", "error");
+    return;
+  }
+
+  setOpenApiLoading(true);
+  setOpenApiStatus("正在读取 JSON 文件…", "idle");
+  try {
+    const source = await file.text();
+    const parsed = JSON.parse(source);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("文件内容必须是 JSON 对象。");
+    }
+    elements.openApiEditor.value = JSON.stringify(parsed, null, 2);
+    setOpenApiStatus("JSON 文件已载入内存，尚未生成或运行。", "success");
+  } catch (error) {
+    setOpenApiStatus(
+      error instanceof SyntaxError
+        ? `JSON 文件格式有误：${error.message}`
+        : error instanceof Error
+          ? error.message
+          : "无法读取该文件，请选择有效的 JSON 文件。",
+      "error",
+    );
+  } finally {
+    elements.openApiFile.value = "";
+    setOpenApiLoading(false);
+  }
+}
+
+function readOpenApiRequest() {
+  const source = elements.openApiEditor.value.trim();
+  if (!source) {
+    throw new Error("请粘贴 OpenAPI JSON 或加载合成演示。");
+  }
+  if (new Blob([source]).size > MAX_OPENAPI_FILE_BYTES) {
+    throw new Error("OpenAPI JSON 超过1 MiB，请缩小文档后重试。");
+  }
+
+  let openApiDocument;
+  try {
+    openApiDocument = JSON.parse(source);
+  } catch (error) {
+    throw new Error(`OpenAPI JSON 格式有误：${error.message}`);
+  }
+  if (
+    !openApiDocument ||
+    typeof openApiDocument !== "object" ||
+    Array.isArray(openApiDocument)
+  ) {
+    throw new Error("OpenAPI JSON 必须是一个对象。");
+  }
+
+  const maxCases = Number(elements.openApiMaxCases.value);
+  if (!Number.isInteger(maxCases) || maxCases < 1 || maxCases > 50) {
+    throw new Error("最大用例数必须是1到50之间的整数。");
+  }
+
+  const request = {
+    document: openApiDocument,
+    max_cases: maxCases,
+  };
+  const baseUrlOverride = elements.openApiBaseUrl.value.trim();
+  if (baseUrlOverride) {
+    request.base_url = baseUrlOverride;
+  }
+  return request;
+}
+
+function validateGeneratedResponse(data) {
+  const cases =
+    data && data.run && Array.isArray(data.run.cases) ? data.run.cases : [];
+  const isPlainObject = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+  const warningsAreValid =
+    data &&
+    Array.isArray(data.warnings) &&
+    !data.warnings.some(
+      (warning) =>
+        !warning ||
+        typeof warning !== "object" ||
+        typeof warning.location !== "string" ||
+        typeof warning.code !== "string" ||
+        typeof warning.message !== "string",
+    );
+  let baseUrlIsValid = false;
+  if (
+    data &&
+    data.run &&
+    typeof data.run.base_url === "string" &&
+    !data.run.base_url.includes("{") &&
+    !data.run.base_url.includes("}")
+  ) {
+    try {
+      const parsedBaseUrl = new URL(data.run.base_url);
+      baseUrlIsValid =
+        ["http:", "https:"].includes(parsedBaseUrl.protocol) &&
+        parsedBaseUrl.hostname !== "" &&
+        parsedBaseUrl.username === "" &&
+        parsedBaseUrl.password === "" &&
+        parsedBaseUrl.hash === "";
+    } catch (_error) {
+      baseUrlIsValid = false;
+    }
+  }
+  const casesAreValid =
+    cases.length >= 1 &&
+    cases.length <= 50 &&
+    cases.every(
+      (testCase) =>
+        testCase &&
+        typeof testCase === "object" &&
+        typeof testCase.id === "string" &&
+        typeof testCase.name === "string" &&
+        ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(testCase.method) &&
+        typeof testCase.path === "string" &&
+        testCase.path.startsWith("/") &&
+        !testCase.path.startsWith("//") &&
+        isPlainObject(testCase.headers) &&
+        Object.keys(testCase.headers).length === 0 &&
+        Array.isArray(testCase.depends_on) &&
+        testCase.depends_on.length === 0 &&
+        Array.isArray(testCase.extract) &&
+        testCase.extract.length === 0 &&
+        Array.isArray(testCase.assertions) &&
+        testCase.assertions.length === 1 &&
+        testCase.assertions.every(
+          (assertion) =>
+            assertion &&
+            typeof assertion === "object" &&
+            assertion.type === "status_code" &&
+            Number.isInteger(assertion.expected) &&
+            assertion.expected >= 200 &&
+            assertion.expected <= 299 &&
+            (assertion.path === null || assertion.path === undefined),
+        ),
+    );
+  if (
+    !data ||
+    typeof data !== "object" ||
+    !Number.isInteger(data.generated_count) ||
+    data.generated_count < 0 ||
+    !Number.isInteger(data.skipped_count) ||
+    data.skipped_count < 0 ||
+    !warningsAreValid ||
+    !data.run ||
+    typeof data.run !== "object" ||
+    !baseUrlIsValid ||
+    !isPlainObject(data.run.variables) ||
+    Object.keys(data.run.variables).length !== 0 ||
+    !Array.isArray(data.run.secret_variables) ||
+    data.run.secret_variables.length !== 0 ||
+    !casesAreValid ||
+    data.generated_count !== cases.length
+  ) {
+    throw new Error("服务返回的生成结果结构不完整，未载入测试编辑器。");
+  }
+  return data;
+}
+
+function renderOpenApiResult(result) {
+  elements.openApiGeneratedCount.textContent = String(result.generated_count);
+  elements.openApiSkippedCount.textContent = String(result.skipped_count);
+  renderOpenApiWarnings(result.warnings);
+  setOpenApiStatus(
+    `生成完成：${result.generated_count} 条可用，${result.skipped_count} 条跳过。请检查后再载入。`,
+    result.generated_count > 0 ? "success" : "error",
+  );
+}
+
+async function generateOpenApiCases() {
+  if (runIsLoading || openApiIsLoading) {
+    setOpenApiStatus("当前有任务正在处理，请稍候。", "error");
+    return;
+  }
+  let request;
+  try {
+    request = readOpenApiRequest();
+  } catch (error) {
+    invalidateGeneratedOpenApi();
+    setOpenApiStatus(error.message, "error");
+    elements.openApiEditor.focus();
+    return;
+  }
+
+  invalidateGeneratedOpenApi();
+  if (openApiAbortController) {
+    openApiAbortController.abort();
+  }
+  const requestSequence = ++openApiRequestSequence;
+  const controller = new AbortController();
+  openApiAbortController = controller;
+  setOpenApiLoading(true);
+  setOpenApiStatus("正在同源生成基础用例，不会执行测试…", "idle");
+  try {
+    const response = await fetch("/api/v1/openapi/generate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`服务返回 HTTP ${response.status}，但响应不是有效 JSON。`);
+    }
+    if (requestSequence !== openApiRequestSequence) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(describeApiError(data, response.status));
+    }
+    const result = validateGeneratedResponse(data);
+    generatedRun = result.run;
+    renderOpenApiResult(result);
+  } catch (error) {
+    if (
+      requestSequence !== openApiRequestSequence ||
+      (error && error.name === "AbortError")
+    ) {
+      return;
+    }
+    invalidateGeneratedOpenApi();
+    setOpenApiStatus(
+      error instanceof Error
+        ? `无法生成用例：${error.message}`
+        : "无法生成用例，请确认服务仍在启动。",
+      "error",
+    );
+  } finally {
+    if (requestSequence === openApiRequestSequence) {
+      openApiAbortController = null;
+      setOpenApiLoading(false);
+    }
+  }
+}
+
+function applyGeneratedRun() {
+  if (runIsLoading || openApiIsLoading) {
+    setOpenApiStatus("当前有任务正在处理，暂时不能载入。", "error");
+    return;
+  }
+  if (!generatedRun) {
+    setOpenApiStatus("当前没有可载入的生成结果。", "error");
+    return;
+  }
+  payload = JSON.parse(JSON.stringify(generatedRun));
+  elements.baseUrl.value = payload.base_url;
+  syncEditor();
+  renderCaseOverview();
+  resetResults();
+  elements.advancedPanel.open = true;
+  setRunStatus("OpenAPI 草稿已载入，尚未运行。请人工检查后再点击运行测试。", "idle");
+  setOpenApiStatus("已载入测试编辑器，没有自动执行任何用例。", "success");
+  document.querySelector("#config-title").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
 }
 
 function syncEditor() {
@@ -206,8 +661,8 @@ function setRunStatus(message, type) {
 }
 
 function setLoading(isLoading) {
-  elements.runTests.disabled = isLoading;
-  elements.restoreDemo.disabled = isLoading;
+  runIsLoading = isLoading;
+  syncMutatingControlState();
   elements.runTests.classList.toggle("is-loading", isLoading);
   elements.runButtonLabel.textContent = isLoading ? "正在运行…" : "运行测试";
   elements.runTests.setAttribute("aria-busy", String(isLoading));
@@ -426,6 +881,10 @@ function renderResult(result) {
 }
 
 async function runTests() {
+  if (openApiIsLoading || runIsLoading) {
+    setRunStatus("当前有任务正在处理，请稍候。", "error");
+    return;
+  }
   let requestPayload;
   try {
     requestPayload = readPayload();
@@ -663,6 +1122,36 @@ elements.jsonEditor.addEventListener("change", () => {
 elements.restoreDemo.addEventListener("click", restoreDemo);
 elements.runTests.addEventListener("click", runTests);
 elements.refreshHistory.addEventListener("click", loadHistory);
+elements.openApiFile.addEventListener("change", (event) => {
+  void handleOpenApiFile(event);
+});
+elements.loadOpenApiDemo.addEventListener("click", loadOpenApiDemo);
+elements.generateOpenApi.addEventListener("click", () => {
+  void generateOpenApiCases();
+});
+elements.applyGeneratedRun.addEventListener("click", applyGeneratedRun);
+
+function handleOpenApiInputChange() {
+  if (openApiAbortController) {
+    openApiAbortController.abort();
+    openApiAbortController = null;
+    openApiRequestSequence += 1;
+    setOpenApiLoading(false);
+  }
+}
+
+[
+  elements.openApiEditor,
+  elements.openApiBaseUrl,
+  elements.openApiMaxCases,
+].forEach((control) => {
+  control.addEventListener("input", () => {
+    handleOpenApiInputChange();
+    invalidateGeneratedOpenApi("OpenAPI 输入已变化，请重新生成。");
+  });
+});
 
 restoreDemo();
+loadOpenApiDemo();
+syncMutatingControlState();
 void loadHistory();

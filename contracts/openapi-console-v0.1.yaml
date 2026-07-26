@@ -1,0 +1,100 @@
+contract: openapi-visual-console
+version: "0.1"
+status: frozen
+
+surface:
+  page: /
+  section_id: openapi-generator
+  language: zh-CN
+  build_step: none
+
+inputs:
+  document_editor:
+    id: openapi-editor
+    format: JSON object
+  file:
+    id: openapi-file
+    accept: [".json", "application/json"]
+    maximum_bytes: 1048576
+    persistence: none
+  base_url_override:
+    id: openapi-base-url
+    required: false
+  max_cases:
+    id: openapi-max-cases
+    default: 20
+    minimum: 1
+    maximum: 50
+
+actions:
+  load_demo:
+    id: load-openapi-demo
+    behavior: load a synthetic same-origin OpenAPI 3.1 document
+  generate:
+    id: generate-openapi
+    request:
+      method: POST
+      path: /api/v1/openapi/generate
+      credentials: same-origin
+    automatic_execution: false
+  apply:
+    id: apply-generated-run
+    behavior:
+      - copy response.run into the existing in-memory run payload
+      - synchronize base URL, JSON editor and case overview
+      - reset prior run results
+      - never call /api/v1/runs
+
+output:
+  status_id: openapi-status
+  summary:
+    generated_count_id: openapi-generated-count
+    skipped_count_id: openapi-skipped-count
+  warnings_id: openapi-warnings
+  rendering: DOM textContent only
+
+security:
+  external_requests: false
+  browser_storage: false
+  console_logging_document: false
+  auto_execution: false
+  file_read_before_size_check: false
+  secret_guidance: never place real keys in OpenAPI examples
+  source_document_lifetime: in-memory page session only
+  server_enforcement:
+    - 1 MiB document
+    - 200 paths
+    - 2048 schema nodes per operation
+    - 256 KiB per generated case
+  response_invariants:
+    run_variables: empty object
+    secret_variables: empty array
+    case_headers: empty object
+    case_dependencies: empty array
+    case_extractions: empty array
+    base_url: absolute HTTP(S), without credentials, fragment or template braces
+    case_path: single-leading-slash relative path
+    assertions: exactly one numeric 2xx status_code assertion
+
+accessibility:
+  labels_for_all_controls: true
+  live_status: polite
+  loading_disables_mutating_actions: true
+  keyboard_operable: true
+
+error_states:
+  - invalid JSON
+  - non-object JSON
+  - oversized file
+  - invalid max_cases
+  - API validation error
+  - malformed successful response
+  - network failure
+
+non_goals:
+  - YAML parsing
+  - drag and drop
+  - automatic execution
+  - browser persistence
+  - authentication credential input
+  - AI generation
