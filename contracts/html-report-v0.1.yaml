@@ -1,0 +1,97 @@
+contract: html-report-v0.1
+status: frozen
+
+endpoint:
+  method: GET
+  path: /api/v1/runs/{run_id}/report
+  success:
+    status: 200
+    content_type: text/html; charset=utf-8
+    content_disposition: attachment; filename="api-test-report-{run_id}.html"
+    headers:
+      Cache-Control: no-store
+      X-Content-Type-Options: nosniff
+      Content-Security-Policy: >-
+        default-src 'none'; style-src 'unsafe-inline'; base-uri 'none';
+        form-action 'none'; frame-ancestors 'none'
+  errors:
+    invalid_or_missing_run:
+      status: 404
+      code: RUN_NOT_FOUND
+    storage_unavailable:
+      status: 503
+      code: HISTORY_STORAGE_UNAVAILABLE
+
+data_boundary:
+  only_source: TestRunResult returned by RunHistoryStore.get
+  forbidden_sources:
+    - TestRunRequest
+    - base_url
+    - request_headers
+    - request_query
+    - request_body
+    - variable_values
+    - original_responses
+  allowed_fields:
+    - run_id
+    - created_at
+    - passed
+    - total
+    - passed_count
+    - failed_count
+    - skipped_count
+    - duration_ms
+    - cases.id
+    - cases.name
+    - cases.status
+    - cases.status_code
+    - cases.response_time_ms
+    - cases.assertions.type
+    - cases.assertions.passed
+    - cases.assertions.expected
+    - cases.assertions.actual
+    - cases.assertions.message
+    - cases.error_code
+    - cases.error
+    - cases.skip_reason
+    - cases.extracted_variables
+
+html_security:
+  encoding: utf-8
+  dynamic_text: html_escape
+  long_dynamic_value_limit_characters: 2000
+  scripts: forbidden
+  external_resources: forbidden
+  forms: forbidden
+  external_links: forbidden
+  meta_csp: >-
+    default-src 'none'; style-src 'unsafe-inline'; base-uri 'none';
+    form-action 'none'
+
+frontend:
+  history_action_label: 下载报告
+  link_template: /api/v1/runs/{encoded_uuid_v4}/report
+  allowed_run_id: canonical lowercase-or-uppercase UUIDv4 text
+  target: same_window_download
+  constraints:
+    - construct_with_DOM_API
+    - no_innerHTML
+    - no_blob_or_object_URL
+    - no_external_navigation
+    - invalid_history_item_has_no_report_link
+    - existing_detail_button_behavior_unchanged
+
+verification:
+  required:
+    - endpoint_success
+    - invalid_uuid
+    - non_v4_uuid
+    - missing_run
+    - storage_failure
+    - response_headers
+    - html_escape
+    - unicode
+    - long_value_truncation
+    - sensitive_field_absence
+    - frontend_safe_link
+    - frontend_mobile_layout

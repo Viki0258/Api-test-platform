@@ -901,13 +901,16 @@ textarea {
 }
 
 .history-item {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
 }
 
 .history-button {
   display: grid;
   width: 100%;
-  min-height: 100%;
+  min-width: 0;
+  min-height: 0;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.9rem;
@@ -933,6 +936,31 @@ textarea {
 .history-button:disabled {
   cursor: wait;
   opacity: 0.65;
+}
+
+.history-report-link {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  margin-top: 0.55rem;
+  padding: 0.5rem 0.8rem;
+  color: var(--brand-dark);
+  text-decoration: none;
+  background: var(--brand-soft);
+  border: 1px solid #cbd8fa;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.history-report-link:hover {
+  color: #fff;
+  background: var(--brand);
+  border-color: var(--brand);
 }
 
 .history-main {
@@ -1132,6 +1160,11 @@ footer {
 
   .history-panel .button {
     width: 100%;
+  }
+
+  .history-report-link {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .summary-grid {

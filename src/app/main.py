@@ -3,7 +3,7 @@ from functools import lru_cache
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings, target_is_allowed
@@ -20,6 +20,10 @@ from app.services.openapi_generator import (
     generate_openapi_cases,
 )
 from app.services.run_history import HistoryStorageError, RunHistoryStore
+from app.services.report_renderer import (
+    REPORT_CONTENT_SECURITY_POLICY,
+    render_test_run_report,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIRECTORY = REPOSITORY_ROOT / "frontend"
@@ -149,15 +153,51 @@ def get_test_run(
     run_id: str,
     history_store: RunHistoryStore = Depends(get_run_history_store),
 ) -> TestRunResult:
+    parsed_run_id = _parse_run_id(run_id)
+    return _get_stored_run(parsed_run_id, history_store)
+
+
+@app.get(
+    "/api/v1/runs/{run_id}/report",
+    response_class=HTMLResponse,
+    tags=["test-runs"],
+)
+def get_test_run_report(
+    run_id: str,
+    history_store: RunHistoryStore = Depends(get_run_history_store),
+) -> HTMLResponse:
+    parsed_run_id = _parse_run_id(run_id)
+    result = _get_stored_run(parsed_run_id, history_store)
+    return HTMLResponse(
+        content=render_test_run_report(result),
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": REPORT_CONTENT_SECURITY_POLICY,
+            "Content-Disposition": (
+                f'attachment; filename="api-test-report-'
+                f'{parsed_run_id}.html"'
+            ),
+        },
+    )
+
+
+def _parse_run_id(run_id: str) -> UUID:
     try:
         parsed_run_id = UUID(run_id)
         if parsed_run_id.version != 4:
             raise ValueError
     except (ValueError, AttributeError):
         raise _run_not_found() from None
+    return parsed_run_id
 
+
+def _get_stored_run(
+    run_id: UUID,
+    history_store: RunHistoryStore,
+) -> TestRunResult:
     try:
-        result = history_store.get(parsed_run_id)
+        result = history_store.get(run_id)
     except HistoryStorageError:
         raise HTTPException(
             status_code=503,
