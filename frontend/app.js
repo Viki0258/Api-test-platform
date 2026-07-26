@@ -36,6 +36,8 @@ const elements = {
 };
 
 const MAX_OPENAPI_FILE_BYTES = 1048576;
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const assertionNames = {
   status_code: "状态码",
@@ -360,7 +362,7 @@ function readOpenApiRequest() {
   if (!source) {
     throw new Error("请粘贴 OpenAPI JSON 或加载合成演示。");
   }
-  if (new Blob([source]).size > MAX_OPENAPI_FILE_BYTES) {
+  if (new TextEncoder().encode(source).byteLength > MAX_OPENAPI_FILE_BYTES) {
     throw new Error("OpenAPI JSON 超过1 MiB，请缩小文档后重试。");
   }
 
@@ -952,6 +954,10 @@ function setHistoryLoading(isLoading) {
   elements.refreshHistory.setAttribute("aria-busy", String(isLoading));
 }
 
+function isCanonicalUuidV4(runId) {
+  return typeof runId === "string" && UUID_V4_PATTERN.test(runId);
+}
+
 function renderHistoryItem(item) {
   const safeItem = item && typeof item === "object" ? item : {};
   const listItem = makeElement("li", "history-item");
@@ -997,6 +1003,21 @@ function renderHistoryItem(item) {
     void loadHistoryDetail(safeItem.run_id, button);
   });
   listItem.append(button);
+  if (isCanonicalUuidV4(safeItem.run_id)) {
+    const encodedRunId = encodeURIComponent(safeItem.run_id);
+    const reportLink = makeElement(
+      "a",
+      "history-report-link",
+      "下载报告",
+    );
+    reportLink.href = `/api/v1/runs/${encodedRunId}/report`;
+    reportLink.setAttribute("download", "");
+    reportLink.setAttribute(
+      "aria-label",
+      `下载 ${formatDate(safeItem.created_at)} 的 HTML 测试报告`,
+    );
+    listItem.append(reportLink);
+  }
   return listItem;
 }
 
