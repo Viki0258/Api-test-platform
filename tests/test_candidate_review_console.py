@@ -101,6 +101,18 @@ def test_review_cards_use_safe_dom_and_only_expose_frozen_editable_fields() -> N
         assert forbidden not in render
 
 
+def test_review_cards_are_collapsed_accessible_editors_by_default() -> None:
+    render = function_block(javascript_source(), "renderCandidateCard")
+
+    assert 'makeElement("details", "candidate-card")' in render
+    assert 'makeElement("summary", "candidate-summary")' in render
+    assert 'makeElement("fieldset", "candidate-editor")' in render
+    assert '"sr-only"' in render
+    assert "card.open = true" in render
+    assert "card.open = false" not in render
+    assert 'event.stopPropagation()' in render
+
+
 def test_review_apply_updates_editor_only_and_never_executes() -> None:
     apply_block = function_block(javascript_source(), "applyReviewedCandidates")
 
