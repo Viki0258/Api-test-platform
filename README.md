@@ -13,6 +13,8 @@
 - 支持从前序 JSON 响应提取变量，并在后续路径、请求和断言中复用
 - 支持显式 `depends_on` 依赖；前序失败时跳过依赖用例，独立用例继续执行
 - 支持从 OpenAPI 3.0/3.1 JSON 对象确定性生成基础正向测试用例草稿
+- 提供可拔插 AI 测试助手：默认 Mock 本地演示，可切换 OpenAI 生成边界、异常和健壮性候选用例
+- AI 输入先移除示例值、默认值、认证信息和敏感字段，输出经严格校验并必须人工确认
 - 缺失变量、提取失败和网络异常返回结构化错误
 - 结果只报告成功提取的变量名，不返回变量值或完整请求头
 - 使用项目内 SQLite 保存已脱敏运行结果，支持最近记录和详情查询
@@ -94,6 +96,32 @@ Swagger 调试入口继续保留在 `/docs`。
 页面只支持 OpenAPI 3.0/3.1 JSON，不支持 YAML。原始文档和生成草稿只保存在当前页面内存，
 不会写入浏览器存储；刷新页面后即丢失。生成和载入都不会自动执行用例，输入文档、示例及覆盖值
 中不得放入真实密钥。
+
+### 使用可拔插 AI 测试助手
+
+1. 先在 OpenAPI 区域加载或粘贴 JSON；AI 助手复用这份页面内存中的文档。
+2. 保持默认 `AI_PROVIDER=mock` 时不需要 API Key，也不会访问外网，可完整演示生成、预览和人工载入流程。
+3. 填写测试目标和1～10之间的最大候选数，点击“生成 AI 候选”。
+4. 查看每条候选的类别和生成理由，点击“载入测试编辑器”后检查请求与预期状态码。
+5. 只有再次手动点击“运行测试”才会访问被测服务；AI 不参与最终通过/失败判定。
+
+真实 OpenAI Provider 只从后端环境变量读取密钥。把真实值放在未提交的 `.env`，不要粘贴到网页、
+用例、OpenAPI 文档、代码、日志或 Git：
+
+```dotenv
+AI_PROVIDER=openai
+OPENAI_API_KEY=your-local-key
+OPENAI_MODEL=gpt-5.6-terra
+```
+
+重启后端后，页面会显示 Provider 和模型状态。OpenAI 适配器使用 Responses API 的严格 JSON Schema
+结构化输出并设置 `store=false`。服务端不会把完整 OpenAPI 原文交给 Provider，而是构造最多50个
+operation、64 KiB 的结构摘要，并移除 server 地址、`example`、`default`、枚举值、认证方案、
+Header/Cookie 参数及疑似密钥字段。模型输出仍是不可信输入：平台会拒绝未知 operation/查询参数、
+绝对 URL、请求头、依赖、提取规则、敏感 JSON 字段和不符合模型的响应。
+
+`GET /api/v1/ai/status` 可查看当前 Provider 是否就绪；`POST /api/v1/ai/cases/generate` 只生成候选，
+不会执行、写入运行历史或保存 OpenAPI 文档。OpenAI 调用可能产生费用，Mock 模式则完全不联网。
 
 ### 运行历史 API
 
@@ -249,7 +277,7 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 .\.venv\Scripts\python.exe .\scripts\validate_workspace.py
 ```
 
-本阶段主 Agent 已确认全量测试为 `171 passed`，分支覆盖率为 `90.65%`。后续代码变化后应重新执行
+本阶段主 Agent 已确认全量测试为 `191 passed`，分支覆盖率为 `91.48%`。后续代码变化后应重新执行
 上述命令，并以当前工作区输出为准。
 
 ## 多 Agent 协作
@@ -279,4 +307,4 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 3. 历史筛选、Allure 适配和报告模板扩展
 4. OpenAPI 用例生成的边界场景扩展与人工确认流程
 5. GitHub Actions、Docker Compose 和独立演示被测服务
-6. 大模型辅助边界场景生成及失败日志总结
+6. AI 失败日志总结、更多 Provider 适配器与生成质量评估

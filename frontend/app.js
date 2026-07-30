@@ -33,6 +33,14 @@ const elements = {
   openApiGeneratedCount: document.querySelector("#openapi-generated-count"),
   openApiSkippedCount: document.querySelector("#openapi-skipped-count"),
   openApiWarnings: document.querySelector("#openapi-warnings"),
+  aiProviderBadge: document.querySelector("#ai-provider-badge"),
+  aiProviderDetail: document.querySelector("#ai-provider-detail"),
+  aiObjective: document.querySelector("#ai-objective"),
+  aiMaxCases: document.querySelector("#ai-max-cases"),
+  generateAi: document.querySelector("#generate-ai"),
+  applyAiRun: document.querySelector("#apply-ai-run"),
+  aiStatus: document.querySelector("#ai-status"),
+  aiInsights: document.querySelector("#ai-insights"),
 };
 
 const MAX_OPENAPI_FILE_BYTES = 1048576;
@@ -142,6 +150,10 @@ let runIsLoading = false;
 let openApiIsLoading = false;
 let openApiRequestSequence = 0;
 let openApiAbortController = null;
+let generatedAiRun = null;
+let aiIsLoading = false;
+let aiRequestSequence = 0;
+let aiAbortController = null;
 
 function createOpenApiDemo() {
   return {
@@ -280,7 +292,7 @@ function invalidateGeneratedOpenApi(message) {
 }
 
 function syncMutatingControlState() {
-  const busy = runIsLoading || openApiIsLoading;
+  const busy = runIsLoading || openApiIsLoading || aiIsLoading;
   elements.runTests.disabled = busy;
   elements.restoreDemo.disabled = busy;
   elements.baseUrl.disabled = busy;
@@ -292,6 +304,10 @@ function syncMutatingControlState() {
   elements.loadOpenApiDemo.disabled = busy;
   elements.generateOpenApi.disabled = busy;
   elements.applyGeneratedRun.disabled = busy || generatedRun === null;
+  elements.aiObjective.disabled = busy;
+  elements.aiMaxCases.disabled = busy;
+  elements.generateAi.disabled = busy;
+  elements.applyAiRun.disabled = busy || generatedAiRun === null;
 }
 
 function setOpenApiLoading(isLoading) {
@@ -501,7 +517,7 @@ function renderOpenApiResult(result) {
 }
 
 async function generateOpenApiCases() {
-  if (runIsLoading || openApiIsLoading) {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
     setOpenApiStatus("当前有任务正在处理，请稍候。", "error");
     return;
   }
@@ -573,7 +589,7 @@ async function generateOpenApiCases() {
 }
 
 function applyGeneratedRun() {
-  if (runIsLoading || openApiIsLoading) {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
     setOpenApiStatus("当前有任务正在处理，暂时不能载入。", "error");
     return;
   }
@@ -593,6 +609,299 @@ function applyGeneratedRun() {
     behavior: "smooth",
     block: "start",
   });
+}
+
+function setAiStatus(message, type) {
+  elements.aiStatus.className = "status-message";
+  if (type === "error") {
+    elements.aiStatus.classList.add("status-error");
+  } else if (type === "success") {
+    elements.aiStatus.classList.add("status-success");
+  }
+  elements.aiStatus.textContent = message;
+}
+
+function invalidateGeneratedAi(message) {
+  generatedAiRun = null;
+  elements.applyAiRun.disabled = true;
+  replaceChildren(elements.aiInsights, [
+    makeElement("li", "openapi-empty-warning", "尚未生成候选用例。"),
+  ]);
+  if (message) {
+    setAiStatus(message, "idle");
+  }
+}
+
+function setAiLoading(isLoading) {
+  aiIsLoading = isLoading;
+  syncMutatingControlState();
+  elements.generateAi.textContent = isLoading ? "正在生成…" : "生成 AI 候选";
+  elements.generateAi.setAttribute("aria-busy", String(isLoading));
+}
+
+function readAiRequest() {
+  const request = readOpenApiRequest();
+  const maxCases = Number(elements.aiMaxCases.value);
+  const objective = elements.aiObjective.value.trim();
+  if (!objective) {
+    throw new Error("请填写测试目标。");
+  }
+  if (objective.length > 500) {
+    throw new Error("测试目标不能超过500个字符。");
+  }
+  if (!Number.isInteger(maxCases) || maxCases < 1 || maxCases > 10) {
+    throw new Error("最大候选数必须是1到10之间的整数。");
+  }
+  request.max_cases = maxCases;
+  request.objective = objective;
+  return request;
+}
+
+function validateAiResponse(data) {
+  const isPlainObject = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+  const run = data && data.run;
+  const cases = run && Array.isArray(run.cases) ? run.cases : [];
+  const insights = data && Array.isArray(data.insights) ? data.insights : [];
+  let baseUrlIsValid = false;
+  if (run && typeof run.base_url === "string") {
+    try {
+      const parsed = new URL(run.base_url);
+      baseUrlIsValid =
+        ["http:", "https:"].includes(parsed.protocol) &&
+        parsed.hostname !== "" &&
+        parsed.username === "" &&
+        parsed.password === "" &&
+        parsed.hash === "" &&
+        !run.base_url.includes("{") &&
+        !run.base_url.includes("}");
+    } catch (_error) {
+      baseUrlIsValid = false;
+    }
+  }
+  const casesAreValid =
+    cases.length >= 1 &&
+    cases.length <= 10 &&
+    new Set(cases.map((testCase) => testCase && testCase.id)).size ===
+      cases.length &&
+    cases.every(
+      (testCase) =>
+        isPlainObject(testCase) &&
+        typeof testCase.id === "string" &&
+        typeof testCase.name === "string" &&
+        ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(testCase.method) &&
+        typeof testCase.path === "string" &&
+        testCase.path.startsWith("/") &&
+        !testCase.path.startsWith("//") &&
+        !testCase.path.includes("://") &&
+        isPlainObject(testCase.headers) &&
+        Object.keys(testCase.headers).length === 0 &&
+        isPlainObject(testCase.query) &&
+        Array.isArray(testCase.depends_on) &&
+        testCase.depends_on.length === 0 &&
+        Array.isArray(testCase.extract) &&
+        testCase.extract.length === 0 &&
+        Array.isArray(testCase.assertions) &&
+        testCase.assertions.length === 1 &&
+        testCase.assertions.every(
+          (assertion) =>
+            isPlainObject(assertion) &&
+            assertion.type === "status_code" &&
+            Number.isInteger(assertion.expected) &&
+            assertion.expected >= 100 &&
+            assertion.expected <= 599 &&
+            (assertion.path === null || assertion.path === undefined),
+        ),
+    );
+  const caseIds = new Set(cases.map((testCase) => testCase.id));
+  const insightsAreValid =
+    insights.length === cases.length &&
+    insights.every(
+      (insight) =>
+        isPlainObject(insight) &&
+        caseIds.has(insight.case_id) &&
+        ["boundary", "negative", "robustness"].includes(insight.category) &&
+        typeof insight.rationale === "string" &&
+        insight.rationale.length >= 1 &&
+        insight.rationale.length <= 500,
+    );
+  const warningsAreValid =
+    Array.isArray(data && data.warnings) &&
+    data.warnings.every(
+      (warning) =>
+        isPlainObject(warning) &&
+        typeof warning.location === "string" &&
+        typeof warning.code === "string" &&
+        typeof warning.message === "string",
+    );
+  if (
+    !isPlainObject(data) ||
+    typeof data.provider !== "string" ||
+    (data.model !== null &&
+      data.model !== undefined &&
+      typeof data.model !== "string") ||
+    data.requires_human_review !== true ||
+    !Number.isInteger(data.generated_count) ||
+    data.generated_count !== cases.length ||
+    !isPlainObject(run) ||
+    !isPlainObject(run.variables) ||
+    Object.keys(run.variables).length !== 0 ||
+    !Array.isArray(run.secret_variables) ||
+    run.secret_variables.length !== 0 ||
+    !baseUrlIsValid ||
+    !casesAreValid ||
+    !insightsAreValid ||
+    !warningsAreValid
+  ) {
+    throw new Error("AI 服务返回了不符合安全契约的响应，结果未载入。");
+  }
+  return data;
+}
+
+function renderAiResult(result) {
+  const categoryNames = {
+    boundary: "边界",
+    negative: "异常",
+    robustness: "健壮性",
+  };
+  const items = result.insights.map((insight) => {
+    const item = makeElement("li", "ai-insight");
+    item.append(
+      makeElement("span", "", categoryNames[insight.category]),
+      makeElement("strong", "", insight.case_id),
+      makeElement("p", "", insight.rationale),
+    );
+    return item;
+  });
+  replaceChildren(elements.aiInsights, items);
+  const modelText = result.model ? ` · ${result.model}` : "";
+  elements.aiProviderDetail.textContent =
+    `Provider：${result.provider}${modelText} · ${result.generated_count} 条候选`;
+  setAiStatus(
+    `已生成 ${result.generated_count} 条候选，请人工检查后再载入。`,
+    "success",
+  );
+}
+
+async function generateAiCases() {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
+    setAiStatus("当前有任务正在处理，请稍候。", "error");
+    return;
+  }
+  let request;
+  try {
+    request = readAiRequest();
+  } catch (error) {
+    invalidateGeneratedAi();
+    setAiStatus(error.message, "error");
+    return;
+  }
+  invalidateGeneratedAi();
+  if (aiAbortController) {
+    aiAbortController.abort();
+  }
+  const requestSequence = ++aiRequestSequence;
+  const controller = new AbortController();
+  aiAbortController = controller;
+  setAiLoading(true);
+  setAiStatus("正在生成候选；真实 Provider 可能产生 API 费用…", "idle");
+  try {
+    const response = await fetch("/api/v1/ai/cases/generate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`服务返回 HTTP ${response.status}，但响应不是有效 JSON。`);
+    }
+    if (requestSequence !== aiRequestSequence) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(describeApiError(data, response.status));
+    }
+    const result = validateAiResponse(data);
+    generatedAiRun = result.run;
+    renderAiResult(result);
+  } catch (error) {
+    if (
+      requestSequence !== aiRequestSequence ||
+      (error && error.name === "AbortError")
+    ) {
+      return;
+    }
+    invalidateGeneratedAi();
+    setAiStatus(
+      error instanceof Error
+        ? `无法生成 AI 候选：${error.message}`
+        : "无法生成 AI 候选，请确认服务仍在启动。",
+      "error",
+    );
+  } finally {
+    if (requestSequence === aiRequestSequence) {
+      aiAbortController = null;
+      setAiLoading(false);
+    }
+  }
+}
+
+function applyAiRun() {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
+    setAiStatus("当前有任务正在处理，暂时不能载入。", "error");
+    return;
+  }
+  if (!generatedAiRun) {
+    setAiStatus("当前没有可载入的 AI 候选。", "error");
+    return;
+  }
+  payload = JSON.parse(JSON.stringify(generatedAiRun));
+  elements.baseUrl.value = payload.base_url;
+  syncEditor();
+  renderCaseOverview();
+  resetResults();
+  elements.advancedPanel.open = true;
+  setRunStatus("AI 候选已载入，尚未运行。请人工检查后再点击运行测试。", "idle");
+  setAiStatus("已载入测试编辑器，没有自动执行任何用例。", "success");
+  document.querySelector("#config-title").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+
+async function loadAiStatus() {
+  try {
+    const response = await fetch("/api/v1/ai/status", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok || !data || typeof data.provider !== "string") {
+      throw new Error("Provider 状态不可用");
+    }
+    elements.aiProviderBadge.textContent =
+      data.provider === "mock" ? "Mock · 本地" : "OpenAI";
+    elements.aiProviderDetail.textContent = data.configured
+      ? `Provider 已就绪${data.model ? ` · ${data.model}` : ""}`
+      : "Provider 尚未配置 API Key";
+    if (!data.configured) {
+      setAiStatus("OpenAI Provider 尚未配置，请在后端设置 API Key。", "error");
+    }
+  } catch (_error) {
+    elements.aiProviderBadge.textContent = "状态未知";
+    elements.aiProviderDetail.textContent = "无法读取 Provider 状态。";
+  }
 }
 
 function syncEditor() {
@@ -883,7 +1192,7 @@ function renderResult(result) {
 }
 
 async function runTests() {
-  if (openApiIsLoading || runIsLoading) {
+  if (openApiIsLoading || aiIsLoading || runIsLoading) {
     setRunStatus("当前有任务正在处理，请稍候。", "error");
     return;
   }
@@ -1151,6 +1460,10 @@ elements.generateOpenApi.addEventListener("click", () => {
   void generateOpenApiCases();
 });
 elements.applyGeneratedRun.addEventListener("click", applyGeneratedRun);
+elements.generateAi.addEventListener("click", () => {
+  void generateAiCases();
+});
+elements.applyAiRun.addEventListener("click", applyAiRun);
 
 function handleOpenApiInputChange() {
   if (openApiAbortController) {
@@ -1169,6 +1482,25 @@ function handleOpenApiInputChange() {
   control.addEventListener("input", () => {
     handleOpenApiInputChange();
     invalidateGeneratedOpenApi("OpenAPI 输入已变化，请重新生成。");
+    if (aiAbortController) {
+      aiAbortController.abort();
+      aiAbortController = null;
+      aiRequestSequence += 1;
+      setAiLoading(false);
+    }
+    invalidateGeneratedAi("OpenAPI 输入已变化，请重新生成 AI 候选。");
+  });
+});
+
+[elements.aiObjective, elements.aiMaxCases].forEach((control) => {
+  control.addEventListener("input", () => {
+    if (aiAbortController) {
+      aiAbortController.abort();
+      aiAbortController = null;
+      aiRequestSequence += 1;
+      setAiLoading(false);
+    }
+    invalidateGeneratedAi("AI 生成条件已变化，请重新生成。");
   });
 });
 
@@ -1176,3 +1508,4 @@ restoreDemo();
 loadOpenApiDemo();
 syncMutatingControlState();
 void loadHistory();
+void loadAiStatus();

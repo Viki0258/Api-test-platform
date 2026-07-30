@@ -208,3 +208,45 @@ class OpenApiGenerateResponse(BaseModel):
     skipped_count: int
     warnings: list[OpenApiGenerationWarning]
     run: TestRunRequest
+
+
+class AiGenerateRequest(BaseModel):
+    document: dict[str, Any]
+    base_url: str | None = None
+    objective: str = Field(
+        default="生成高价值边界和异常接口测试候选用例",
+        min_length=1,
+        max_length=500,
+    )
+    max_cases: int = Field(default=5, ge=1, le=10)
+
+    @field_validator("objective")
+    @classmethod
+    def normalize_objective(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("objective must not be blank")
+        return normalized
+
+
+class AiProviderStatus(BaseModel):
+    provider: str
+    configured: bool
+    model: str | None = None
+    network_access: bool
+
+
+class AiCaseInsight(BaseModel):
+    case_id: str
+    category: str
+    rationale: str
+
+
+class AiGenerateResponse(BaseModel):
+    provider: str
+    model: str | None = None
+    generated_count: int
+    warnings: list[OpenApiGenerationWarning]
+    requires_human_review: bool = True
+    insights: list[AiCaseInsight]
+    run: TestRunRequest

@@ -182,6 +182,86 @@
         </div>
       </section>
 
+      <section
+        id="ai-assistant"
+        class="panel ai-panel"
+        aria-labelledby="ai-title"
+      >
+        <div class="panel-heading">
+          <div>
+            <p class="step-label">智能增强</p>
+            <h2 id="ai-title">可拔插 AI 测试助手</h2>
+            <p class="openapi-intro">
+              复用上方 OpenAPI JSON，生成边界与异常候选用例。默认 Mock 不联网；
+              配置真实 Provider 后，密钥仍只存在后端。
+            </p>
+          </div>
+          <span id="ai-provider-badge" class="environment-badge">正在检测…</span>
+        </div>
+
+        <div class="ai-layout">
+          <div>
+            <label class="field" for="ai-objective">
+              <span>测试目标</span>
+              <textarea
+                id="ai-objective"
+                rows="4"
+                maxlength="500"
+                spellcheck="false"
+              >生成高价值边界和异常接口测试候选用例</textarea>
+            </label>
+            <div class="openapi-options">
+              <label class="field" for="ai-max-cases">
+                <span>最大候选数</span>
+                <input
+                  id="ai-max-cases"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value="5"
+                >
+              </label>
+            </div>
+            <div class="openapi-actions">
+              <button id="generate-ai" class="button button-primary" type="button">
+                生成 AI 候选
+              </button>
+              <button
+                id="apply-ai-run"
+                class="button button-secondary"
+                type="button"
+                disabled
+              >
+                载入测试编辑器
+              </button>
+            </div>
+            <div
+              id="ai-status"
+              class="status-message"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              候选用例不会自动执行，请生成后逐条检查。
+            </div>
+          </div>
+          <div class="openapi-output" aria-labelledby="ai-output-title">
+            <h3 id="ai-output-title">候选分析</h3>
+            <p id="ai-provider-detail" class="field-help">
+              Provider 状态加载中。
+            </p>
+            <ul id="ai-insights" class="ai-insights" aria-label="AI 候选分析">
+              <li class="openapi-empty-warning">尚未生成候选用例。</li>
+            </ul>
+            <p class="privacy-note openapi-privacy">
+              服务端仅发送去除示例值、默认值和认证信息后的接口结构；
+              “载入”与“生成”都不会调用运行接口。
+            </p>
+          </div>
+        </div>
+      </section>
+
       <div class="workspace">
         <section class="panel configuration" aria-labelledby="config-title">
           <div class="panel-heading">

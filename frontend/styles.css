@@ -210,6 +210,49 @@ h1 {
   margin-bottom: 24px;
 }
 
+.ai-panel {
+  margin-bottom: 24px;
+}
+
+.ai-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(300px, 1.2fr);
+  gap: 24px;
+}
+
+.ai-insights {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-insight {
+  padding: 0.85rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.ai-insight strong,
+.ai-insight span {
+  display: block;
+}
+
+.ai-insight span {
+  color: var(--brand);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ai-insight p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .openapi-panel .panel-heading {
   align-items: flex-start;
 }
@@ -1089,6 +1132,10 @@ footer {
   }
 
   .openapi-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-layout {
     grid-template-columns: 1fr;
   }
 

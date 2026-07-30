@@ -8,12 +8,16 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings, target_is_allowed
 from app.schemas import (
+    AiGenerateRequest,
+    AiGenerateResponse,
+    AiProviderStatus,
     OpenApiGenerateRequest,
     OpenApiGenerateResponse,
     TestRunHistoryList,
     TestRunRequest,
     TestRunResult,
 )
+from app.services.ai_assistant import AiAssistantError, AiAssistantService
 from app.services.executor import TestExecutor
 from app.services.openapi_generator import (
     OpenApiGenerationError,
@@ -43,6 +47,18 @@ app.mount(
 @lru_cache
 def get_run_history_store() -> RunHistoryStore:
     return RunHistoryStore()
+
+
+def get_ai_assistant(
+    settings: Settings = Depends(get_settings),
+) -> AiAssistantService:
+    try:
+        return AiAssistantService(settings)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
 
 
 @app.get("/", include_in_schema=False, response_class=FileResponse)
@@ -80,6 +96,35 @@ def generate_from_openapi(
     except OpenApiGenerationError as exc:
         raise HTTPException(
             status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
+
+
+@app.get(
+    "/api/v1/ai/status",
+    response_model=AiProviderStatus,
+    tags=["ai-assistant"],
+)
+def get_ai_status(
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiProviderStatus:
+    return assistant.status()
+
+
+@app.post(
+    "/api/v1/ai/cases/generate",
+    response_model=AiGenerateResponse,
+    tags=["ai-assistant"],
+)
+def generate_ai_cases(
+    payload: AiGenerateRequest,
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiGenerateResponse:
+    try:
+        return assistant.generate(payload)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from None
 
