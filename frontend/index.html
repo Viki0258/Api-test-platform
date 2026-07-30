@@ -55,8 +55,8 @@
             <p class="step-label">用例生成</p>
             <h2 id="openapi-title">从 OpenAPI 生成基础用例</h2>
             <p class="openapi-intro">
-              粘贴或选择 OpenAPI 3.0/3.1 JSON，先生成可检查的正向用例草稿。
-              生成不会访问被测地址，也不会自动运行测试。
+              这里选择的 JSON 就是接口文档，但必须符合 OpenAPI 3.0/3.1。
+              平台先生成可检查的正向用例草稿，不访问被测地址，也不自动运行。
             </p>
           </div>
           <button
@@ -81,7 +81,8 @@
               >
             </label>
             <p id="openapi-file-help" class="field-help">
-              文件读取前会检查大小，最大1 MiB。内容只保存在当前页面内存中。
+              支持开发提供或从 Swagger、Apifox 导出的 OpenAPI JSON，最大1 MiB；
+              普通业务 JSON 和 Postman Collection 不能直接使用。
             </p>
 
             <label class="field" for="openapi-editor">
@@ -138,7 +139,7 @@
                 type="button"
                 disabled
               >
-                载入测试编辑器
+                前往审核工作台
               </button>
             </div>
             <div
@@ -176,7 +177,7 @@
               <li class="openapi-empty-warning">尚未生成，没有警告。</li>
             </ul>
             <p class="privacy-note openapi-privacy">
-              “载入测试编辑器”只复制草稿并等待人工确认，不会调用运行接口。
+              生成结果会进入下方审核工作台，不会调用运行接口。
             </p>
           </div>
         </div>
@@ -192,8 +193,8 @@
             <p class="step-label">智能增强</p>
             <h2 id="ai-title">可拔插 AI 测试助手</h2>
             <p class="openapi-intro">
-              复用上方 OpenAPI JSON，生成边界与异常候选用例。默认 Mock 不联网；
-              配置真实 Provider 后，密钥仍只存在后端。
+              基础生成器负责正向草稿，AI负责补充边界、异常和健壮性候选。
+              默认 Mock 只演示流程；配置真实 Provider 后才由模型分析，密钥仍只存在后端。
             </p>
           </div>
           <span id="ai-provider-badge" class="environment-badge">正在检测…</span>
@@ -233,7 +234,7 @@
                 type="button"
                 disabled
               >
-                载入测试编辑器
+                前往审核工作台
               </button>
             </div>
             <div
@@ -260,6 +261,60 @@
             </p>
           </div>
         </div>
+      </section>
+
+      <section
+        id="candidate-review"
+        class="panel review-panel"
+        aria-labelledby="candidate-review-title"
+      >
+        <div class="panel-heading">
+          <div>
+            <p class="step-label">人工审核</p>
+            <h2 id="candidate-review-title">候选用例审核工作台</h2>
+            <p class="openapi-intro">
+              基础草稿和 AI 候选会汇总到这里。先勾选、编辑并检查，再替换或追加到运行配置；
+              整个审核过程不会发送测试请求。
+            </p>
+          </div>
+          <span id="review-count" class="environment-badge">0 条候选</span>
+        </div>
+
+        <div class="review-toolbar" aria-label="候选用例批量操作">
+          <button id="select-all-candidates" class="button button-secondary" type="button">
+            全选
+          </button>
+          <button id="clear-candidate-selection" class="button button-secondary" type="button">
+            取消全选
+          </button>
+          <button id="replace-editor-candidates" class="button button-primary" type="button">
+            用选中项替换测试编辑器
+          </button>
+          <button id="append-editor-candidates" class="button button-secondary" type="button">
+            将选中项追加到测试编辑器
+          </button>
+        </div>
+
+        <div
+          id="review-status"
+          class="status-message"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          尚无候选。请先从 OpenAPI 生成基础草稿，或使用 AI 助手生成候选。
+        </div>
+
+        <div id="candidate-list" class="candidate-list">
+          <div class="empty-state review-empty">
+            <h3>候选将在这里逐条展示</h3>
+            <p>可以直接编辑名称、方法、路径、查询参数、请求体和预期状态码。</p>
+          </div>
+        </div>
+
+        <p class="privacy-note review-privacy">
+          工作台不提供请求头、密钥、依赖或变量提取编辑入口。最终仍需单独点击“运行测试”。
+        </p>
       </section>
 
       <div class="workspace">

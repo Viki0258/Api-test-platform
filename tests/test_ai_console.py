@@ -48,7 +48,7 @@ def test_ai_section_exposes_accessible_manual_review_controls() -> None:
     )
 
 
-def test_ai_generation_is_same_origin_and_apply_never_executes() -> None:
+def test_ai_generation_is_same_origin_and_navigation_never_executes() -> None:
     javascript = javascript_source()
     generator = function_block(javascript, "generateAiCases")
     apply_block = function_block(javascript, "applyAiRun")
@@ -58,10 +58,9 @@ def test_ai_generation_is_same_origin_and_apply_never_executes() -> None:
     assert "validateAiResponse(data)" in generator
     assert re.search(r"\bgeneratedAiRun\s*=", generator)
 
-    assert re.search(r"\bpayload\s*=", apply_block)
-    assert "syncEditor()" in apply_block
-    assert "renderCaseOverview()" in apply_block
-    assert "resetResults()" in apply_block
+    assert "candidate-review-title" in apply_block
+    assert "scrollIntoView" in apply_block
+    assert re.search(r"\bpayload\s*=", apply_block) is None
     assert "fetch(" not in apply_block
     assert "/api/v1/runs" not in apply_block
     assert "runTests(" not in apply_block

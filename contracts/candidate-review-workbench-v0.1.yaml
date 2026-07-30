@@ -1,0 +1,90 @@
+contract: candidate-review-workbench
+version: "0.1"
+status: frozen
+
+inputs:
+  openapi:
+    source: POST /api/v1/openapi/generate
+    label: OpenAPI基础
+    run: TestRunRequest
+    insights: none
+  ai:
+    source: POST /api/v1/ai/cases/generate
+    label: AI候选
+    run: TestRunRequest
+    insights:
+      case_id: string
+      category: boundary_or_negative_or_robustness
+      rationale: string
+
+candidate:
+  internal_key: source plus case id
+  selected_default: true
+  editable:
+    - name
+    - method
+    - relative path
+    - query JSON object
+    - request body JSON or null
+    - expected status code
+  preserved:
+    headers: {}
+    depends_on: []
+    extract: []
+  forbidden:
+    - credentials
+    - request header editing
+    - variable editing
+    - dependency editing
+    - extraction editing
+    - absolute request URL
+
+review:
+  rendering: DOM text nodes only
+  selection:
+    - individual
+    - select all
+    - select none
+  validation:
+    name: 1 to 120 characters
+    method: GET POST PUT PATCH DELETE
+    path: relative path beginning with one slash
+    query: JSON object
+    json_body: valid JSON value or blank for null
+    expected_status: integer 100 to 599
+    case_ids: unique in final run
+
+apply:
+  replace:
+    behavior: replace editor cases and base_url with selected candidates
+    executes_tests: false
+  append:
+    requirements:
+      - candidate base URLs all match
+      - editor base URL matches candidate base URL
+      - no case ID collision
+    behavior: append selected candidates to current editor cases
+    executes_tests: false
+  confirmation:
+    execution_requires_separate_run_button: true
+
+state:
+  persistence: page memory only
+  generation_refresh:
+    same_source: replace previous candidates from that source
+    other_source: preserve
+  input_change:
+    generated_source_candidate: invalidate
+    manually_edited_other_source: preserve
+
+accessibility:
+  candidate_group: fieldset with legend
+  status: aria-live polite
+  controls: explicit labels
+
+non_goals:
+  - automatic test execution
+  - automatic AI acceptance
+  - browser secret storage
+  - cross-target mixed runs
+  - replacing backend validation
