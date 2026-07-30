@@ -1,6 +1,7 @@
 from functools import lru_cache
 from urllib.parse import urlsplit
 
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,12 +11,24 @@ class Settings(BaseSettings):
     run_budget_seconds: float = 30.0
     allowed_target_origins: str = ""
     allow_local_targets: bool = False
+    ai_provider: str = "mock"
+    ai_request_timeout_seconds: float = 30.0
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.6-terra"
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("ai_provider")
+    @classmethod
+    def validate_ai_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"mock", "openai"}:
+            raise ValueError("ai_provider must be 'mock' or 'openai'")
+        return normalized
 
     def target_origins(self) -> frozenset[str]:
         return frozenset(

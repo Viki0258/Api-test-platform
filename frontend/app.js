@@ -33,6 +33,21 @@ const elements = {
   openApiGeneratedCount: document.querySelector("#openapi-generated-count"),
   openApiSkippedCount: document.querySelector("#openapi-skipped-count"),
   openApiWarnings: document.querySelector("#openapi-warnings"),
+  aiProviderBadge: document.querySelector("#ai-provider-badge"),
+  aiProviderDetail: document.querySelector("#ai-provider-detail"),
+  aiObjective: document.querySelector("#ai-objective"),
+  aiMaxCases: document.querySelector("#ai-max-cases"),
+  generateAi: document.querySelector("#generate-ai"),
+  applyAiRun: document.querySelector("#apply-ai-run"),
+  aiStatus: document.querySelector("#ai-status"),
+  aiInsights: document.querySelector("#ai-insights"),
+  reviewCount: document.querySelector("#review-count"),
+  reviewStatus: document.querySelector("#review-status"),
+  candidateList: document.querySelector("#candidate-list"),
+  selectAllCandidates: document.querySelector("#select-all-candidates"),
+  clearCandidateSelection: document.querySelector("#clear-candidate-selection"),
+  replaceEditorCandidates: document.querySelector("#replace-editor-candidates"),
+  appendEditorCandidates: document.querySelector("#append-editor-candidates"),
 };
 
 const MAX_OPENAPI_FILE_BYTES = 1048576;
@@ -142,6 +157,11 @@ let runIsLoading = false;
 let openApiIsLoading = false;
 let openApiRequestSequence = 0;
 let openApiAbortController = null;
+let generatedAiRun = null;
+let aiIsLoading = false;
+let aiRequestSequence = 0;
+let aiAbortController = null;
+let reviewCandidates = [];
 
 function createOpenApiDemo() {
   return {
@@ -171,12 +191,13 @@ function createOpenApiDemo() {
               },
             },
             {
-              name: "include_profile",
+              name: "page_size",
               in: "query",
               required: true,
               schema: {
-                type: "boolean",
-                default: false,
+                type: "integer",
+                minimum: 1,
+                default: 20,
               },
             },
           ],
@@ -204,6 +225,432 @@ function makeElement(tag, className, text) {
 
 function replaceChildren(parent, children) {
   parent.replaceChildren(...children);
+}
+
+function setReviewStatus(message, type) {
+  elements.reviewStatus.className = "status-message";
+  if (type === "error") {
+    elements.reviewStatus.classList.add("status-error");
+  } else if (type === "success") {
+    elements.reviewStatus.classList.add("status-success");
+  }
+  elements.reviewStatus.textContent = message;
+}
+
+function candidateSourceLabel(source) {
+  return source === "ai" ? "AI 候选" : "OpenAPI 基础";
+}
+
+function removeReviewSource(source) {
+  const next = reviewCandidates.filter((candidate) => candidate.source !== source);
+  if (next.length === reviewCandidates.length) {
+    return;
+  }
+  reviewCandidates = next;
+  renderCandidateReview();
+  setReviewStatus(
+    reviewCandidates.length
+      ? `已移除失效的${candidateSourceLabel(source)}，其余候选仍保留。`
+      : "候选已失效，请根据最新输入重新生成。",
+    "idle",
+  );
+}
+
+function registerReviewSource(source, run, insights) {
+  const insightByCaseId = new Map(
+    (Array.isArray(insights) ? insights : []).map((insight) => [
+      insight.case_id,
+      insight,
+    ]),
+  );
+  const retained = reviewCandidates.filter(
+    (candidate) => candidate.source !== source,
+  );
+  const additions = run.cases.map((testCase, index) => {
+    const statusAssertion = testCase.assertions.find(
+      (assertion) => assertion.type === "status_code",
+    );
+    const insight = insightByCaseId.get(testCase.id) || null;
+    return {
+      key: `${source}:${testCase.id}:${index}`,
+      source,
+      baseUrl: run.base_url,
+      caseId: testCase.id,
+      selected: true,
+      name: testCase.name,
+      method: testCase.method,
+      path: testCase.path,
+      queryText: JSON.stringify(testCase.query || {}, null, 2),
+      bodyText:
+        testCase.json_body === null || testCase.json_body === undefined
+          ? ""
+          : JSON.stringify(testCase.json_body, null, 2),
+      expectedStatus: String(statusAssertion.expected),
+      category: insight ? insight.category : null,
+      rationale: insight ? insight.rationale : null,
+      error: null,
+    };
+  });
+  reviewCandidates = [...retained, ...additions];
+  renderCandidateReview();
+  setReviewStatus(
+    `已更新${candidateSourceLabel(source)}：${additions.length} 条，` +
+      "请逐条审核后再载入运行配置。",
+    "success",
+  );
+  document.querySelector("#candidate-review-title").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+
+function makeCandidateField(labelText, control, className) {
+  const label = makeElement("label", `field ${className || ""}`.trim());
+  label.append(makeElement("span", "", labelText), control);
+  return label;
+}
+
+function updateCandidateValue(candidate, field, value) {
+  candidate[field] = value;
+  candidate.error = null;
+}
+
+function renderCandidateCard(candidate, index) {
+  const fieldset = makeElement("fieldset", "candidate-card");
+  if (candidate.error) {
+    fieldset.classList.add("has-error");
+  }
+  const legend = makeElement(
+    "legend",
+    "candidate-legend",
+    `${index + 1}. ${candidate.caseId}`,
+  );
+  const heading = makeElement("div", "candidate-heading");
+  const selectLabel = makeElement("label", "candidate-select");
+  const checkbox = makeElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = candidate.selected;
+  checkbox.setAttribute("aria-label", `选择候选 ${candidate.caseId}`);
+  checkbox.addEventListener("change", () => {
+    candidate.selected = checkbox.checked;
+    updateReviewCount();
+  });
+  selectLabel.append(
+    checkbox,
+    makeElement("span", "", candidate.name || candidate.caseId),
+  );
+  const sourceBadge = makeElement(
+    "span",
+    `candidate-source${candidate.source === "ai" ? " source-ai" : ""}`,
+    candidateSourceLabel(candidate.source),
+  );
+  heading.append(selectLabel, sourceBadge);
+  fieldset.append(legend, heading);
+
+  if (candidate.rationale) {
+    const categoryNames = {
+      boundary: "边界",
+      negative: "异常",
+      robustness: "健壮性",
+    };
+    fieldset.append(
+      makeElement(
+        "p",
+        "candidate-reason",
+        `${categoryNames[candidate.category] || "AI"}：${candidate.rationale}`,
+      ),
+    );
+  }
+
+  const fields = makeElement("div", "candidate-fields");
+  const nameInput = makeElement("input");
+  nameInput.type = "text";
+  nameInput.maxLength = 120;
+  nameInput.value = candidate.name;
+  nameInput.addEventListener("input", () => {
+    updateCandidateValue(candidate, "name", nameInput.value);
+  });
+
+  const methodSelect = makeElement("select");
+  ["GET", "POST", "PUT", "PATCH", "DELETE"].forEach((method) => {
+    const option = makeElement("option", "", method);
+    option.value = method;
+    option.selected = method === candidate.method;
+    methodSelect.append(option);
+  });
+  methodSelect.addEventListener("change", () => {
+    updateCandidateValue(candidate, "method", methodSelect.value);
+  });
+
+  const pathInput = makeElement("input");
+  pathInput.type = "text";
+  pathInput.value = candidate.path;
+  pathInput.spellcheck = false;
+  pathInput.addEventListener("input", () => {
+    updateCandidateValue(candidate, "path", pathInput.value);
+  });
+
+  const statusInput = makeElement("input");
+  statusInput.type = "number";
+  statusInput.min = "100";
+  statusInput.max = "599";
+  statusInput.step = "1";
+  statusInput.value = candidate.expectedStatus;
+  statusInput.addEventListener("input", () => {
+    updateCandidateValue(candidate, "expectedStatus", statusInput.value);
+  });
+
+  const queryEditor = makeElement("textarea");
+  queryEditor.rows = 4;
+  queryEditor.spellcheck = false;
+  queryEditor.value = candidate.queryText;
+  queryEditor.addEventListener("input", () => {
+    updateCandidateValue(candidate, "queryText", queryEditor.value);
+  });
+
+  const bodyEditor = makeElement("textarea");
+  bodyEditor.rows = 4;
+  bodyEditor.spellcheck = false;
+  bodyEditor.placeholder = "留空表示不发送 JSON 请求体";
+  bodyEditor.value = candidate.bodyText;
+  bodyEditor.addEventListener("input", () => {
+    updateCandidateValue(candidate, "bodyText", bodyEditor.value);
+  });
+
+  fields.append(
+    makeCandidateField("用例名称", nameInput, "field-name"),
+    makeCandidateField("请求方法", methodSelect, "field-method"),
+    makeCandidateField("相对路径", pathInput, "field-path"),
+    makeCandidateField("预期状态码", statusInput, "field-status"),
+    makeCandidateField("查询参数 JSON", queryEditor, "field-query"),
+    makeCandidateField("请求体 JSON", bodyEditor, "field-body"),
+  );
+  fieldset.append(fields);
+  if (candidate.error) {
+    fieldset.append(makeElement("p", "candidate-error", candidate.error));
+  }
+  return fieldset;
+}
+
+function updateReviewCount() {
+  const selectedCount = reviewCandidates.filter(
+    (candidate) => candidate.selected,
+  ).length;
+  elements.reviewCount.textContent =
+    `${reviewCandidates.length} 条候选 · 已选 ${selectedCount}`;
+}
+
+function renderCandidateReview() {
+  if (reviewCandidates.length === 0) {
+    replaceChildren(elements.candidateList, [
+      (() => {
+        const empty = makeElement("div", "empty-state review-empty");
+        empty.append(
+          makeElement("h3", "", "候选将在这里逐条展示"),
+          makeElement(
+            "p",
+            "",
+            "可以直接编辑名称、方法、路径、查询参数、请求体和预期状态码。",
+          ),
+        );
+        return empty;
+      })(),
+    ]);
+  } else {
+    replaceChildren(
+      elements.candidateList,
+      reviewCandidates.map(renderCandidateCard),
+    );
+  }
+  updateReviewCount();
+  syncMutatingControlState();
+}
+
+function parseCandidateJson(source, label, candidate) {
+  if (!source.trim() && label === "请求体") {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch (_error) {
+    throw new Error(`${candidate.caseId} 的${label}不是有效 JSON。`);
+  }
+  if (
+    label === "查询参数" &&
+    (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+  ) {
+    throw new Error(`${candidate.caseId} 的查询参数必须是 JSON 对象。`);
+  }
+  return parsed;
+}
+
+function candidateToTestCase(candidate) {
+  const name = candidate.name.trim();
+  const path = candidate.path.trim();
+  const expectedStatus = Number(candidate.expectedStatus);
+  if (!name || name.length > 120) {
+    throw new Error(`${candidate.caseId} 的用例名称长度必须是1到120个字符。`);
+  }
+  if (
+    !["GET", "POST", "PUT", "PATCH", "DELETE"].includes(candidate.method)
+  ) {
+    throw new Error(`${candidate.caseId} 的请求方法不受支持。`);
+  }
+  if (
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    path.includes("://")
+  ) {
+    throw new Error(`${candidate.caseId} 必须使用以单个 / 开头的相对路径。`);
+  }
+  if (
+    !Number.isInteger(expectedStatus) ||
+    expectedStatus < 100 ||
+    expectedStatus > 599
+  ) {
+    throw new Error(`${candidate.caseId} 的预期状态码必须是100到599的整数。`);
+  }
+  return {
+    id: candidate.caseId,
+    name,
+    method: candidate.method,
+    path,
+    headers: {},
+    query: parseCandidateJson(candidate.queryText, "查询参数", candidate),
+    json_body: parseCandidateJson(candidate.bodyText, "请求体", candidate),
+    assertions: [
+      {
+        type: "status_code",
+        expected: expectedStatus,
+        path: null,
+      },
+    ],
+    depends_on: [],
+    extract: [],
+  };
+}
+
+function normalizedBaseUrl(value) {
+  const parsed = new URL(value);
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error("候选用例的被测地址无效。");
+  }
+  return parsed.href.replace(/\/$/, "");
+}
+
+function readSelectedCandidates() {
+  const selected = reviewCandidates.filter((candidate) => candidate.selected);
+  if (selected.length === 0) {
+    throw new Error("请至少选择一条候选用例。");
+  }
+  const baseUrls = new Set(
+    selected.map((candidate) => normalizedBaseUrl(candidate.baseUrl)),
+  );
+  if (baseUrls.size !== 1) {
+    throw new Error("选中候选来自不同被测地址，不能放入同一次测试运行。");
+  }
+  const cases = [];
+  const ids = new Set();
+  for (const candidate of selected) {
+    try {
+      const testCase = candidateToTestCase(candidate);
+      if (ids.has(testCase.id)) {
+        throw new Error(`选中候选存在重复用例 ID：${testCase.id}。`);
+      }
+      ids.add(testCase.id);
+      cases.push(testCase);
+      candidate.error = null;
+    } catch (error) {
+      candidate.error = error.message;
+      renderCandidateReview();
+      throw error;
+    }
+  }
+  return {
+    baseUrl: selected[0].baseUrl,
+    cases,
+  };
+}
+
+function applyReviewedCandidates(mode) {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
+    setReviewStatus("当前有任务正在处理，暂时不能载入候选。", "error");
+    return;
+  }
+  let reviewed;
+  try {
+    reviewed = readSelectedCandidates();
+  } catch (error) {
+    setReviewStatus(error.message, "error");
+    return;
+  }
+
+  if (mode === "append") {
+    let current;
+    try {
+      current = readPayload();
+    } catch (error) {
+      setReviewStatus(`当前测试编辑器无法追加：${error.message}`, "error");
+      return;
+    }
+    if (
+      normalizedBaseUrl(current.base_url) !==
+      normalizedBaseUrl(reviewed.baseUrl)
+    ) {
+      setReviewStatus(
+        "候选与当前运行配置的被测地址不同；请改用“替换测试编辑器”。",
+        "error",
+      );
+      return;
+    }
+    const existingIds = new Set(
+      current.cases.map((testCase, index) => testCase.id || `case_${index + 1}`),
+    );
+    const collision = reviewed.cases.find((testCase) =>
+      existingIds.has(testCase.id),
+    );
+    if (collision) {
+      setReviewStatus(
+        `无法追加：用例 ID ${collision.id} 已存在。`,
+        "error",
+      );
+      return;
+    }
+    payload = {
+      ...current,
+      cases: [...current.cases, ...reviewed.cases],
+    };
+  } else {
+    payload = {
+      base_url: reviewed.baseUrl,
+      variables: {},
+      secret_variables: [],
+      cases: reviewed.cases,
+    };
+  }
+
+  elements.baseUrl.value = payload.base_url;
+  syncEditor();
+  renderCaseOverview();
+  resetResults();
+  elements.advancedPanel.open = true;
+  setReviewStatus(
+    mode === "append"
+      ? `已追加 ${reviewed.cases.length} 条候选，没有自动运行。`
+      : `已用 ${reviewed.cases.length} 条候选替换测试编辑器，没有自动运行。`,
+    "success",
+  );
+  setRunStatus("候选已载入，请检查运行配置后再手动点击运行测试。", "idle");
+  document.querySelector("#config-title").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
 }
 
 function setOpenApiStatus(message, type) {
@@ -268,6 +715,7 @@ function renderOpenApiWarnings(warnings) {
 
 function invalidateGeneratedOpenApi(message) {
   generatedRun = null;
+  removeReviewSource("openapi");
   elements.applyGeneratedRun.disabled = true;
   elements.openApiGeneratedCount.textContent = "0";
   elements.openApiSkippedCount.textContent = "0";
@@ -280,7 +728,7 @@ function invalidateGeneratedOpenApi(message) {
 }
 
 function syncMutatingControlState() {
-  const busy = runIsLoading || openApiIsLoading;
+  const busy = runIsLoading || openApiIsLoading || aiIsLoading;
   elements.runTests.disabled = busy;
   elements.restoreDemo.disabled = busy;
   elements.baseUrl.disabled = busy;
@@ -292,6 +740,20 @@ function syncMutatingControlState() {
   elements.loadOpenApiDemo.disabled = busy;
   elements.generateOpenApi.disabled = busy;
   elements.applyGeneratedRun.disabled = busy || generatedRun === null;
+  elements.aiObjective.disabled = busy;
+  elements.aiMaxCases.disabled = busy;
+  elements.generateAi.disabled = busy;
+  elements.applyAiRun.disabled = busy || generatedAiRun === null;
+  const hasCandidates = reviewCandidates.length > 0;
+  elements.selectAllCandidates.disabled = busy || !hasCandidates;
+  elements.clearCandidateSelection.disabled = busy || !hasCandidates;
+  elements.replaceEditorCandidates.disabled = busy || !hasCandidates;
+  elements.appendEditorCandidates.disabled = busy || !hasCandidates;
+  elements.candidateList
+    .querySelectorAll("input, select, textarea")
+    .forEach((control) => {
+      control.disabled = busy;
+    });
 }
 
 function setOpenApiLoading(isLoading) {
@@ -309,6 +771,7 @@ function loadOpenApiDemo() {
   elements.openApiMaxCases.value = "20";
   elements.openApiFile.value = "";
   invalidateGeneratedOpenApi("已加载同源合成演示，尚未生成或运行。");
+  invalidateGeneratedAi("OpenAPI 输入已变化，请重新生成 AI 候选。");
 }
 
 async function handleOpenApiFile(event) {
@@ -317,6 +780,7 @@ async function handleOpenApiFile(event) {
     return;
   }
   invalidateGeneratedOpenApi();
+  invalidateGeneratedAi();
   if (file.size > MAX_OPENAPI_FILE_BYTES) {
     elements.openApiFile.value = "";
     setOpenApiStatus("文件超过1 MiB，未读取任何内容。", "error");
@@ -501,7 +965,7 @@ function renderOpenApiResult(result) {
 }
 
 async function generateOpenApiCases() {
-  if (runIsLoading || openApiIsLoading) {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
     setOpenApiStatus("当前有任务正在处理，请稍候。", "error");
     return;
   }
@@ -550,6 +1014,7 @@ async function generateOpenApiCases() {
     const result = validateGeneratedResponse(data);
     generatedRun = result.run;
     renderOpenApiResult(result);
+    registerReviewSource("openapi", result.run, []);
   } catch (error) {
     if (
       requestSequence !== openApiRequestSequence ||
@@ -573,7 +1038,7 @@ async function generateOpenApiCases() {
 }
 
 function applyGeneratedRun() {
-  if (runIsLoading || openApiIsLoading) {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
     setOpenApiStatus("当前有任务正在处理，暂时不能载入。", "error");
     return;
   }
@@ -581,18 +1046,299 @@ function applyGeneratedRun() {
     setOpenApiStatus("当前没有可载入的生成结果。", "error");
     return;
   }
-  payload = JSON.parse(JSON.stringify(generatedRun));
-  elements.baseUrl.value = payload.base_url;
-  syncEditor();
-  renderCaseOverview();
-  resetResults();
-  elements.advancedPanel.open = true;
-  setRunStatus("OpenAPI 草稿已载入，尚未运行。请人工检查后再点击运行测试。", "idle");
-  setOpenApiStatus("已载入测试编辑器，没有自动执行任何用例。", "success");
-  document.querySelector("#config-title").scrollIntoView({
+  setOpenApiStatus("基础草稿已进入审核工作台。", "success");
+  document.querySelector("#candidate-review-title").scrollIntoView({
     behavior: "smooth",
     block: "start",
   });
+}
+
+function setAiStatus(message, type) {
+  elements.aiStatus.className = "status-message";
+  if (type === "error") {
+    elements.aiStatus.classList.add("status-error");
+  } else if (type === "success") {
+    elements.aiStatus.classList.add("status-success");
+  }
+  elements.aiStatus.textContent = message;
+}
+
+function invalidateGeneratedAi(message) {
+  generatedAiRun = null;
+  removeReviewSource("ai");
+  elements.applyAiRun.disabled = true;
+  replaceChildren(elements.aiInsights, [
+    makeElement("li", "openapi-empty-warning", "尚未生成候选用例。"),
+  ]);
+  if (message) {
+    setAiStatus(message, "idle");
+  }
+}
+
+function setAiLoading(isLoading) {
+  aiIsLoading = isLoading;
+  syncMutatingControlState();
+  elements.generateAi.textContent = isLoading ? "正在生成…" : "生成 AI 候选";
+  elements.generateAi.setAttribute("aria-busy", String(isLoading));
+}
+
+function readAiRequest() {
+  const request = readOpenApiRequest();
+  const maxCases = Number(elements.aiMaxCases.value);
+  const objective = elements.aiObjective.value.trim();
+  if (!objective) {
+    throw new Error("请填写测试目标。");
+  }
+  if (objective.length > 500) {
+    throw new Error("测试目标不能超过500个字符。");
+  }
+  if (!Number.isInteger(maxCases) || maxCases < 1 || maxCases > 10) {
+    throw new Error("最大候选数必须是1到10之间的整数。");
+  }
+  request.max_cases = maxCases;
+  request.objective = objective;
+  return request;
+}
+
+function validateAiResponse(data) {
+  const isPlainObject = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+  const run = data && data.run;
+  const cases = run && Array.isArray(run.cases) ? run.cases : [];
+  const insights = data && Array.isArray(data.insights) ? data.insights : [];
+  let baseUrlIsValid = false;
+  if (run && typeof run.base_url === "string") {
+    try {
+      const parsed = new URL(run.base_url);
+      baseUrlIsValid =
+        ["http:", "https:"].includes(parsed.protocol) &&
+        parsed.hostname !== "" &&
+        parsed.username === "" &&
+        parsed.password === "" &&
+        parsed.hash === "" &&
+        !run.base_url.includes("{") &&
+        !run.base_url.includes("}");
+    } catch (_error) {
+      baseUrlIsValid = false;
+    }
+  }
+  const casesAreValid =
+    cases.length >= 1 &&
+    cases.length <= 10 &&
+    new Set(cases.map((testCase) => testCase && testCase.id)).size ===
+      cases.length &&
+    cases.every(
+      (testCase) =>
+        isPlainObject(testCase) &&
+        typeof testCase.id === "string" &&
+        typeof testCase.name === "string" &&
+        ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(testCase.method) &&
+        typeof testCase.path === "string" &&
+        testCase.path.startsWith("/") &&
+        !testCase.path.startsWith("//") &&
+        !testCase.path.includes("://") &&
+        isPlainObject(testCase.headers) &&
+        Object.keys(testCase.headers).length === 0 &&
+        isPlainObject(testCase.query) &&
+        Array.isArray(testCase.depends_on) &&
+        testCase.depends_on.length === 0 &&
+        Array.isArray(testCase.extract) &&
+        testCase.extract.length === 0 &&
+        Array.isArray(testCase.assertions) &&
+        testCase.assertions.length === 1 &&
+        testCase.assertions.every(
+          (assertion) =>
+            isPlainObject(assertion) &&
+            assertion.type === "status_code" &&
+            Number.isInteger(assertion.expected) &&
+            assertion.expected >= 100 &&
+            assertion.expected <= 599 &&
+            (assertion.path === null || assertion.path === undefined),
+        ),
+    );
+  const caseIds = new Set(cases.map((testCase) => testCase.id));
+  const insightsAreValid =
+    insights.length === cases.length &&
+    insights.every(
+      (insight) =>
+        isPlainObject(insight) &&
+        caseIds.has(insight.case_id) &&
+        ["boundary", "negative", "robustness"].includes(insight.category) &&
+        typeof insight.rationale === "string" &&
+        insight.rationale.length >= 1 &&
+        insight.rationale.length <= 500,
+    );
+  const warningsAreValid =
+    Array.isArray(data && data.warnings) &&
+    data.warnings.every(
+      (warning) =>
+        isPlainObject(warning) &&
+        typeof warning.location === "string" &&
+        typeof warning.code === "string" &&
+        typeof warning.message === "string",
+    );
+  if (
+    !isPlainObject(data) ||
+    typeof data.provider !== "string" ||
+    (data.model !== null &&
+      data.model !== undefined &&
+      typeof data.model !== "string") ||
+    data.requires_human_review !== true ||
+    !Number.isInteger(data.generated_count) ||
+    data.generated_count !== cases.length ||
+    !isPlainObject(run) ||
+    !isPlainObject(run.variables) ||
+    Object.keys(run.variables).length !== 0 ||
+    !Array.isArray(run.secret_variables) ||
+    run.secret_variables.length !== 0 ||
+    !baseUrlIsValid ||
+    !casesAreValid ||
+    !insightsAreValid ||
+    !warningsAreValid
+  ) {
+    throw new Error("AI 服务返回了不符合安全契约的响应，结果未载入。");
+  }
+  return data;
+}
+
+function renderAiResult(result) {
+  const categoryNames = {
+    boundary: "边界",
+    negative: "异常",
+    robustness: "健壮性",
+  };
+  const items = result.insights.map((insight) => {
+    const item = makeElement("li", "ai-insight");
+    item.append(
+      makeElement("span", "", categoryNames[insight.category]),
+      makeElement("strong", "", insight.case_id),
+      makeElement("p", "", insight.rationale),
+    );
+    return item;
+  });
+  replaceChildren(elements.aiInsights, items);
+  const modelText = result.model ? ` · ${result.model}` : "";
+  elements.aiProviderDetail.textContent =
+    `Provider：${result.provider}${modelText} · ${result.generated_count} 条候选`;
+  setAiStatus(
+    `已生成 ${result.generated_count} 条候选，请人工检查后再载入。`,
+    "success",
+  );
+}
+
+async function generateAiCases() {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
+    setAiStatus("当前有任务正在处理，请稍候。", "error");
+    return;
+  }
+  let request;
+  try {
+    request = readAiRequest();
+  } catch (error) {
+    invalidateGeneratedAi();
+    setAiStatus(error.message, "error");
+    return;
+  }
+  invalidateGeneratedAi();
+  if (aiAbortController) {
+    aiAbortController.abort();
+  }
+  const requestSequence = ++aiRequestSequence;
+  const controller = new AbortController();
+  aiAbortController = controller;
+  setAiLoading(true);
+  setAiStatus("正在生成候选；真实 Provider 可能产生 API 费用…", "idle");
+  try {
+    const response = await fetch("/api/v1/ai/cases/generate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch (_error) {
+      throw new Error(`服务返回 HTTP ${response.status}，但响应不是有效 JSON。`);
+    }
+    if (requestSequence !== aiRequestSequence) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(describeApiError(data, response.status));
+    }
+    const result = validateAiResponse(data);
+    generatedAiRun = result.run;
+    renderAiResult(result);
+    registerReviewSource("ai", result.run, result.insights);
+  } catch (error) {
+    if (
+      requestSequence !== aiRequestSequence ||
+      (error && error.name === "AbortError")
+    ) {
+      return;
+    }
+    invalidateGeneratedAi();
+    setAiStatus(
+      error instanceof Error
+        ? `无法生成 AI 候选：${error.message}`
+        : "无法生成 AI 候选，请确认服务仍在启动。",
+      "error",
+    );
+  } finally {
+    if (requestSequence === aiRequestSequence) {
+      aiAbortController = null;
+      setAiLoading(false);
+    }
+  }
+}
+
+function applyAiRun() {
+  if (runIsLoading || openApiIsLoading || aiIsLoading) {
+    setAiStatus("当前有任务正在处理，暂时不能载入。", "error");
+    return;
+  }
+  if (!generatedAiRun) {
+    setAiStatus("当前没有可载入的 AI 候选。", "error");
+    return;
+  }
+  setAiStatus("AI 候选已进入审核工作台。", "success");
+  document.querySelector("#candidate-review-title").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+
+async function loadAiStatus() {
+  try {
+    const response = await fetch("/api/v1/ai/status", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok || !data || typeof data.provider !== "string") {
+      throw new Error("Provider 状态不可用");
+    }
+    elements.aiProviderBadge.textContent =
+      data.provider === "mock" ? "Mock · 本地" : "OpenAI";
+    elements.aiProviderDetail.textContent = data.configured
+      ? `Provider 已就绪${data.model ? ` · ${data.model}` : ""}`
+      : "Provider 尚未配置 API Key";
+    if (!data.configured) {
+      setAiStatus("OpenAI Provider 尚未配置，请在后端设置 API Key。", "error");
+    }
+  } catch (_error) {
+    elements.aiProviderBadge.textContent = "状态未知";
+    elements.aiProviderDetail.textContent = "无法读取 Provider 状态。";
+  }
 }
 
 function syncEditor() {
@@ -883,7 +1629,7 @@ function renderResult(result) {
 }
 
 async function runTests() {
-  if (openApiIsLoading || runIsLoading) {
+  if (openApiIsLoading || aiIsLoading || runIsLoading) {
     setRunStatus("当前有任务正在处理，请稍候。", "error");
     return;
   }
@@ -1151,6 +1897,30 @@ elements.generateOpenApi.addEventListener("click", () => {
   void generateOpenApiCases();
 });
 elements.applyGeneratedRun.addEventListener("click", applyGeneratedRun);
+elements.generateAi.addEventListener("click", () => {
+  void generateAiCases();
+});
+elements.applyAiRun.addEventListener("click", applyAiRun);
+elements.selectAllCandidates.addEventListener("click", () => {
+  reviewCandidates.forEach((candidate) => {
+    candidate.selected = true;
+  });
+  renderCandidateReview();
+  setReviewStatus("已选择全部候选。", "idle");
+});
+elements.clearCandidateSelection.addEventListener("click", () => {
+  reviewCandidates.forEach((candidate) => {
+    candidate.selected = false;
+  });
+  renderCandidateReview();
+  setReviewStatus("已取消全部候选选择。", "idle");
+});
+elements.replaceEditorCandidates.addEventListener("click", () => {
+  applyReviewedCandidates("replace");
+});
+elements.appendEditorCandidates.addEventListener("click", () => {
+  applyReviewedCandidates("append");
+});
 
 function handleOpenApiInputChange() {
   if (openApiAbortController) {
@@ -1169,10 +1939,31 @@ function handleOpenApiInputChange() {
   control.addEventListener("input", () => {
     handleOpenApiInputChange();
     invalidateGeneratedOpenApi("OpenAPI 输入已变化，请重新生成。");
+    if (aiAbortController) {
+      aiAbortController.abort();
+      aiAbortController = null;
+      aiRequestSequence += 1;
+      setAiLoading(false);
+    }
+    invalidateGeneratedAi("OpenAPI 输入已变化，请重新生成 AI 候选。");
+  });
+});
+
+[elements.aiObjective, elements.aiMaxCases].forEach((control) => {
+  control.addEventListener("input", () => {
+    if (aiAbortController) {
+      aiAbortController.abort();
+      aiAbortController = null;
+      aiRequestSequence += 1;
+      setAiLoading(false);
+    }
+    invalidateGeneratedAi("AI 生成条件已变化，请重新生成。");
   });
 });
 
 restoreDemo();
 loadOpenApiDemo();
+renderCandidateReview();
 syncMutatingControlState();
 void loadHistory();
+void loadAiStatus();

@@ -1,0 +1,135 @@
+contract: ai-case-generation
+version: "0.1"
+status: frozen
+
+endpoints:
+  status:
+    method: GET
+    path: /api/v1/ai/status
+    response:
+      provider: mock_or_openai
+      configured: boolean
+      model: string_or_null
+      network_access: boolean
+  generate:
+    method: POST
+    path: /api/v1/ai/cases/generate
+    tags: [ai-assistant]
+
+request:
+  document:
+    type: object
+    required: true
+    constraints:
+      openapi_versions: ["3.0.x", "3.1.x"]
+      max_serialized_bytes: 1048576
+      max_paths: 200
+  base_url:
+    type: http_url
+    required: false
+    precedence: request override, then document servers[0].url
+  objective:
+    type: string
+    default: 生成高价值边界和异常接口测试候选用例
+    minimum_length: 1
+    maximum_length: 500
+  max_cases:
+    type: integer
+    default: 5
+    minimum: 1
+    maximum: 10
+
+response:
+  provider: mock_or_openai
+  model: string_or_null
+  generated_count: integer
+  warnings:
+    type: array
+    item:
+      location: string
+      code: string
+      message: string
+  requires_human_review:
+    type: boolean
+    constant: true
+  run:
+    type: TestRunRequest
+    constraints:
+      variables: {}
+      secret_variables: []
+      maximum_cases: 10
+
+provider_input:
+  allowed:
+    - OpenAPI version
+    - path templates
+    - HTTP methods
+    - operationId and summary
+    - path and query parameter names, locations, required flags and structural schema constraints
+    - JSON request body structural schema
+    - declared response status codes
+    - user objective
+  stripped:
+    - examples and example values
+    - defaults and enum values
+    - securitySchemes and security requirements
+    - Header and Cookie parameters
+    - descriptions and extensions
+    - server URLs
+    - credentials and request headers
+  limits:
+    maximum_operations: 50
+    maximum_schema_depth: 5
+    maximum_prompt_bytes: 65536
+
+provider_output:
+  structured_json: required
+  case_constraints:
+    headers: {}
+    depends_on: []
+    extract: []
+    relative_path_only: true
+    assertions: at_least_one
+  forbidden:
+    - credentials
+    - absolute request URLs
+    - automatic execution
+    - persistence of source document or prompt
+
+providers:
+  mock:
+    default: true
+    network_access: false
+    api_key_required: false
+    purpose: deterministic local workflow demonstration
+  openai:
+    endpoint: https://api.openai.com/v1/responses
+    api_key_source: backend_environment_only
+    response_format: strict_json_schema
+    store: false
+    timeout_seconds: bounded
+
+errors:
+  provider_not_configured:
+    status: 503
+    code: AI_PROVIDER_NOT_CONFIGURED
+  provider_unavailable:
+    status: 502
+    code: AI_PROVIDER_UNAVAILABLE
+  invalid_provider_output:
+    status: 502
+    code: AI_PROVIDER_INVALID_OUTPUT
+  invalid_document:
+    status: 422
+    code: INVALID_AI_SOURCE_DOCUMENT
+  source_too_large:
+    status: 422
+    code: AI_SOURCE_DOCUMENT_TOO_LARGE
+  no_supported_operations:
+    status: 422
+    code: NO_AI_SOURCE_OPERATIONS
+
+human_confirmation:
+  generation_executes_tests: false
+  apply_executes_tests: false
+  execution_requires_separate_user_action: true

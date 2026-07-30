@@ -282,15 +282,13 @@ def test_warnings_and_api_values_use_safe_text_dom_rendering() -> None:
         assert forbidden not in javascript
 
 
-def test_apply_only_updates_editor_state_and_never_executes_tests() -> None:
+def test_openapi_apply_only_navigates_to_review_and_never_executes_tests() -> None:
     javascript = javascript_source()
     apply_block = function_block(javascript, "applyGeneratedRun")
 
-    assert re.search(r"\bpayload\s*=", apply_block)
-    assert "baseUrl.value" in apply_block
-    assert "syncEditor()" in apply_block
-    assert "renderCaseOverview()" in apply_block
-    assert "resetResults()" in apply_block
+    assert "candidate-review-title" in apply_block
+    assert "scrollIntoView" in apply_block
+    assert re.search(r"\bpayload\s*=", apply_block) is None
     assert "fetch(" not in apply_block
     assert "runTests(" not in apply_block
     assert "/api/v1/runs" not in apply_block
