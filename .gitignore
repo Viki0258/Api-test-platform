@@ -12,3 +12,8 @@ build/
 *.egg-info/
 .data/
 tmp/
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<

@@ -314,6 +314,37 @@ def test_secret_values_are_redacted_from_assertions_and_errors() -> None:
     assert "[REDACTED]" in serialized
 
 
+def test_nested_secret_values_are_redacted_from_assertions() -> None:
+    secret = "nested-secret-value"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"data": {"token": secret, "tokens": [secret]}},
+        )
+    )
+    workflow = case(
+        name="nested secret assertion",
+        path="/token",
+        assertions=[
+            AssertionRule(
+                type=AssertionType.JSON_EQUALS,
+                path="data.token",
+                expected="{{auth}}",
+            )
+        ],
+    )
+
+    result = ApiTestExecutor(transport=transport).run(
+        "https://example.test",
+        [workflow],
+        variables={"auth": {"token": secret, "tokens": [secret]}},
+        secret_variables=["auth"],
+    )
+
+    assert secret not in result.model_dump_json()
+    assert "[REDACTED]" in result.model_dump_json()
+
+
 def test_extracted_variables_do_not_leak_between_runs() -> None:
     executor = ApiTestExecutor(
         transport=httpx.MockTransport(

@@ -1,0 +1,128 @@
+version: 0.2.0
+status: frozen
+owner: main-agent
+frozen_at: 2026-08-14
+supersedes: run-history-v0.1.yaml
+
+purpose:
+  - persist safe API test results for local demos and multi-client deployments
+  - provide deterministic list and detail reads across SQLite and MySQL
+  - bound in-process concurrent test execution
+
+compatibility:
+  post_path_unchanged: /api/v1/runs
+  post_request_unchanged: true
+  existing_response_fields_unchanged: true
+  history_paths_unchanged: true
+  authentication_added: false
+  tenant_isolation_added: false
+
+configuration:
+  database_url:
+    env: DATABASE_URL
+    optional: true
+    unset_behavior: repository_local_sqlite
+    sqlite_default_path: .data/run-history.sqlite3
+    allowed_schemes:
+      - sqlite
+      - mysql+pymysql
+    credentials_source: uncommitted_env_only
+  max_concurrent_runs:
+    env: MAX_CONCURRENT_RUNS
+    default: 4
+    minimum: 1
+    maximum: 64
+    rejection: immediate
+
+storage:
+  abstraction: SQLAlchemy Core
+  engines:
+    sqlite:
+      use_case: local_demo_and_tests
+      repository_local_default: true
+      connection_timeout_seconds: 5
+      journal_mode: WAL
+    mysql:
+      driver: pymysql
+      engine: InnoDB
+      pool_pre_ping: true
+  schema:
+    table: test_runs
+    sequence_tie_breaker: sequence DESC
+    ordering:
+      - created_at DESC
+      - sequence DESC
+    result_column: JSON-compatible LONGTEXT
+    retention_max_records: 500
+  persisted_data:
+    - TestRunResult after secret redaction
+    - summary counters
+  forbidden_data:
+    - base_url
+    - request headers
+    - query parameters
+    - request JSON body
+    - run variable context
+    - credentials
+    - raw network, SQLAlchemy, MySQL, or SQLite errors
+
+api:
+  create:
+    method: POST
+    path: /api/v1/runs
+    behavior:
+      - validate payload and target before acquiring a capacity slot
+      - execute one run
+      - save passed, failed and skipped results
+      - return the saved result with metadata
+    capacity_exceeded:
+      status: 429
+      code: RUN_CAPACITY_EXCEEDED
+      retry_after_seconds: positive_integer
+      executor_called: false
+      persistence_called: false
+    persistence_failure:
+      status: 503
+      code: HISTORY_PERSISTENCE_FAILED
+  list:
+    method: GET
+    path: /api/v1/runs
+    query:
+      limit:
+        default: 20
+        minimum: 1
+        maximum: 100
+    response:
+      fields:
+        - items
+        - limit
+        - total
+      items_are_summaries: true
+      cases_included: false
+  detail:
+    method: GET
+    path: /api/v1/runs/{run_id}
+    response: complete persisted TestRunResult
+    malformed_or_missing:
+      status: 404
+      code: RUN_NOT_FOUND
+  storage_read_failure:
+    status: 503
+    code: HISTORY_STORAGE_UNAVAILABLE
+    raw_error_returned: false
+
+execution:
+  within_one_run: submitted_order_with_dependencies
+  across_clients: concurrent_until_capacity
+  queue_when_full: false
+  slot_release: finally_after_execution_and_persistence
+
+migrations:
+  forward: create_test_runs_table_and_created_sequence_index
+  rollback: drop_only_the_change_owned_test_runs_table_after_backup
+  data_impact: new deployments create an empty table; existing SQLite data is not migrated automatically
+
+security:
+  local_single_user_or_shared_history: true
+  sql_parameters_required: true
+  database_url_or_credentials_in_errors: forbidden

@@ -25,6 +25,13 @@ class AssertionType(StrEnum):
     RESPONSE_TIME_MS = "response_time_ms"
 
 
+class RunJobState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class AssertionRule(BaseModel):
     type: AssertionType
     expected: Any
@@ -165,6 +172,65 @@ class TestRunResult(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("created_at must be timezone-aware")
         return value.astimezone(timezone.utc)
+
+
+class AsyncRunAccepted(BaseModel):
+    run_id: UUID
+    status: RunJobState
+    status_url: str = Field(min_length=1, max_length=512)
+    created_at: datetime
+
+    @field_validator("run_id")
+    @classmethod
+    def require_uuidv4(cls, value: UUID) -> UUID:
+        if value.version != 4:
+            raise ValueError("run_id must be UUIDv4")
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def require_queued_status(cls, value: RunJobState) -> RunJobState:
+        if value is not RunJobState.QUEUED:
+            raise ValueError("accepted status must be queued")
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+    model_config = {"extra": "forbid"}
+
+
+class AsyncRunStatus(BaseModel):
+    run_id: UUID
+    status: RunJobState
+    attempt: int = Field(ge=0)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_code: str | None = Field(default=None, max_length=64)
+    error_message: str | None = Field(default=None, max_length=500)
+
+    @field_validator("run_id")
+    @classmethod
+    def require_uuidv4(cls, value: UUID) -> UUID:
+        if value.version != 4:
+            raise ValueError("run_id must be UUIDv4")
+        return value
+
+    @field_validator("created_at", "started_at", "finished_at")
+    @classmethod
+    def require_utc_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamps must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+    model_config = {"extra": "forbid"}
 
 
 class TestRunSummary(BaseModel):
