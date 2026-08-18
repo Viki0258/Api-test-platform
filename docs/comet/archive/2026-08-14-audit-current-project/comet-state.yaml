@@ -1,0 +1,361 @@
+schema: comet.native.v4
+name: audit-current-project
+language: zh-CN
+phase: archive
+status: done
+state_version: 7
+brief: brief.md
+spec_changes:
+  - capability: concurrent-history
+    operation: create
+    source: specs/concurrent-history/spec.md
+workspace:
+  isolation: current
+  change_branch: feature/task-oriented-console
+  target_branch: feature/task-oriented-console
+  finish: null
+loop:
+  stage: done
+  goal_cycle: 1
+  iteration: 1
+  attempt: 1
+  retry_epoch: 0
+  failed_iteration_count: 0
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: null
+acceptance:
+  - id: A1
+    source: brief.md
+    text: "A1: 配置 DATABASE_URL=mysql+pymysql://... 后，历史存储使用 MySQL/InnoDB；未配置时本地
+      SQLite 演示和现有单元测试仍可用。"
+    result: passed
+    reason:
+      text: RunHistoryStore 支持 SQLite 回退和 mysql+pymysql；MySQL 方言、InnoDB 和 LONGTEXT
+        元数据测试通过。
+      truncated: false
+  - id: A2
+    source: brief.md
+    text: "A2: 使用相同 API 并发提交多个 run 时，每个请求都得到自己的 UUIDv4 结果，变量和案例结果不串线，单个 run
+      内的依赖顺序保持不变。"
+    result: passed
+    reason:
+      text: 两个真实 TestClient 线程交叠执行，UUID、变量/案例结果和依赖顺序互不串线。
+      truncated: false
+  - id: A3
+    source: brief.md
+    text: "A3: 同时运行数达到配置上限（默认 4）时，后续 POST /api/v1/runs 在执行目标请求前返回 HTTP 429、错误码
+      RUN_CAPACITY_EXCEEDED 和正整数 Retry-After。"
+    result: passed
+    reason:
+      text: 容量满载测试返回 429、RUN_CAPACITY_EXCEEDED 和正整数 Retry-After，executor/store 均未调用。
+      truncated: false
+  - id: A4
+    source: brief.md
+    text: "A4: run 在成功、执行失败或历史保存异常时都会释放容量；释放后新的客户端可以进入，且不会因异常永久占用槽位。"
+    result: passed
+    reason:
+      text: executor 异常和历史保存异常后，下一次运行均可获得容量槽并成功完成。
+      truncated: false
+  - id: A5
+    source: brief.md
+    text: "A5: 多个并发完成的 run 写入历史后，列表无丢失、无重复、无损坏，仍按 created_at DESC, sequence DESC
+      稳定排序；详情可读取完整安全结果。"
+    result: passed
+    reason:
+      text: 20 路并发 SQLite 写入全部保留、无重复、可读取，并按 created_at/sequence 稳定排序。
+      truncated: false
+  - id: A6
+    source: brief.md
+    text: "A6: SQLite 和 MySQL 存储错误都映射为稳定的 503 历史错误，不向 API 返回驱动错误、凭据、绝对数据库路径或 SQL 细节。"
+    result: passed
+    reason:
+      text: 损坏 SQLite、损坏 JSON 和历史 API 读写异常均转换为稳定错误，不暴露路径、SQL 或驱动细节。
+      truncated: false
+  - id: A7
+    source: brief.md
+    text: "A7: 历史库只保存已脱敏的 TestRunResult 和摘要字段，不保存 base_url、请求头、查询参数、请求体或运行变量上下文。"
+    result: passed
+    reason:
+      text: 持久化字节检查确认只写已脱敏 TestRunResult 和摘要，不写目标、请求数据或变量上下文。
+      truncated: false
+  - id: A8
+    source: brief.md
+    text: "A8: 配置、依赖、数据库初始化/迁移说明和自动化测试覆盖本变更；不需要真实 MySQL 服务也能完成默认验证。"
+    result: passed
+    reason:
+      text: pyproject、.env.example、README、契约和迁移边界已更新；218 tests passed，覆盖率 91.18%。
+      truncated: false
+  - id: A9
+    source: specs/concurrent-history/spec.md
+    text: SQLite fallback remains available Given DATABASE_URL is unset When a run
+      is saved and then listed and loaded Then the result is stored in the
+      repository-local SQLite database with the existing summary ordering and
+      response shape.
+    result: passed
+    reason:
+      text: 未配置数据库时使用仓库内 SQLite，WAL、初始化、读写和现有历史 API 回归通过。
+      truncated: false
+  - id: A10
+    source: specs/concurrent-history/spec.md
+    text: MySQL URL selects the MySQL dialect Given DATABASE_URL has the
+      mysql+pymysql scheme When the history engine is created Then SQLAlchemy
+      uses the MySQL dialect with an InnoDB-compatible table definition and does
+      not expose the URL or credentials in storage errors.
+    result: passed
+    reason:
+      text: MySQL DDL 编译确认 ENGINE=InnoDB、result_json LONGTEXT、sequence 主键和排序索引；未连接服务器。
+      truncated: false
+  - id: A11
+    source: specs/concurrent-history/spec.md
+    text: Concurrent runs are isolated Given multiple clients submit valid runs
+      concurrently When each run completes Then each result has its own run id,
+      variables and cases, and no result contains state from another run.
+    result: passed
+    reason:
+      text: 并发 endpoint 测试确认两个客户端同时执行，历史记录和运行状态独立。
+      truncated: false
+  - id: A12
+    source: specs/concurrent-history/spec.md
+    text: Capacity is bounded Given all configured run slots are occupied When
+      another valid run is submitted Then the request returns 429 with
+      RUN_CAPACITY_EXCEEDED, a positive Retry-After, and no executor or
+      persistence call.
+    result: passed
+    reason:
+      text: 容量测试确认满载时在 executor 和 history store 前立即拒绝。
+      truncated: false
+  - id: A13
+    source: specs/concurrent-history/spec.md
+    text: Capacity is released after every terminal path Given a run finishes
+      successfully, fails during execution, or fails while saving history When
+      the next valid run is submitted Then the next run can acquire the slot and
+      the prior terminal error remains sanitized and stable.
+    result: passed
+    reason:
+      text: 成功、executor 失败、历史保存失败三类终止路径均验证容量释放。
+      truncated: false
+  - id: A14
+    source: specs/concurrent-history/spec.md
+    text: Concurrent history writes are consistent Given several completed results
+      are saved at the same time When history is listed and individual details
+      are loaded Then every retained result is complete, unique, readable, and
+      ordered newest first.
+    result: passed
+    reason:
+      text: 并发写入结果完整、唯一、可详情读取，列表排序稳定。
+      truncated: false
+  - id: A15
+    source: specs/concurrent-history/spec.md
+    text: The service keeps the existing synchronous request/response contract for
+      one run while allowing independent client requests to execute at the same
+      time.
+    result: passed
+    reason:
+      text: endpoint 保持同步请求/响应模型，独立客户端可在线程中同时执行。
+      truncated: false
+  - id: A16
+    source: specs/concurrent-history/spec.md
+    text: DATABASE_URL is optional. With no value, the default SQLite database
+      remains .data/run-history.sqlite3 and is restricted to the repository.
+      With a mysql+pymysql URL, the store uses a MySQL InnoDB table with a
+      stable sequence tie-breaker and a LONGTEXT/JSON-compatible result column.
+    result: passed
+    reason:
+      text: DATABASE_URL 可选，SQLite 回退、MySQL/InnoDB、sequence tie-breaker 和 LONGTEXT
+        均已验证。
+      truncated: false
+  - id: A17
+    source: specs/concurrent-history/spec.md
+    text: The storage interface exposes initialize(), save(result), list(limit), and
+      get(run_id); callers do not depend on a database driver.
+    result: passed
+    reason:
+      text: RunHistoryStore 保留 initialize/save/list/get 接口，调用方不依赖具体数据库驱动。
+      truncated: false
+  - id: A18
+    source: specs/concurrent-history/spec.md
+    text: The persisted payload is the already redacted TestRunResult. Request
+      target, headers, query values, request body, run variables, credentials,
+      and raw driver errors are never persisted or returned.
+    result: passed
+    reason:
+      text: 脱敏结果持久化和错误响应测试确认目标、请求数据、变量上下文及原始错误不外泄。
+      truncated: false
+  - id: A19
+    source: specs/concurrent-history/spec.md
+    text: MAX_CONCURRENT_RUNS defaults to 4 and is a bounded positive setting. A
+      request acquires one slot only after payload and target validation. If no
+      slot is immediately available, the API returns 429 with detail code
+      RUN_CAPACITY_EXCEEDED and a positive Retry-After header; it does not call
+      the executor or history store.
+    result: passed
+    reason:
+      text: MAX_CONCURRENT_RUNS 默认 4、范围 1–64；目标校验后获取槽位，满载立即拒绝且不排队。
+      truncated: false
+  - id: A20
+    source: specs/concurrent-history/spec.md
+    text: A slot is released in a finally block after execution and history save,
+      including executor exceptions and persistence failures. There is no queue.
+    result: passed
+    reason:
+      text: main.py 的 finally 覆盖执行和保存阶段，容量释放测试通过。
+      truncated: false
+  - id: A21
+    source: specs/concurrent-history/spec.md
+    text: Existing run-history routes and safe response fields remain compatible.
+      The run executor remains sequential within a run, while independent HTTP
+      client requests may overlap.
+    result: passed
+    reason:
+      text: 既有历史 API、响应字段、前端契约和 executor 依赖串行回归测试全部通过。
+      truncated: false
+builder_handoff:
+  candidate_id: 8d8afff8-fa31-446e-b0da-efa297134510
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:6e890990-a279-451d-bcad-5ff86793ec5b
+  iteration: 1
+  summary:
+    text: 已完成 MySQL/SQLite 历史存储适配、单进程有界多客户端并发和 API/配置文档更新。RunHistoryStore 保留原有
+      SQLite 接口并支持 mysql+pymysql，使用 InnoDB 表定义、参数化事务和脱敏结果；POST /api/v1/runs
+      在目标校验后获取容量槽，满载返回 429 与 Retry-After，并在执行/保存所有终止路径 finally 释放。单个 run
+      仍按依赖顺序串行，独立客户端可并发。
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+    - A5
+    - A6
+    - A7
+    - A8
+    - A9
+    - A10
+    - A11
+    - A12
+    - A13
+    - A14
+    - A15
+    - A16
+    - A17
+    - A18
+    - A19
+    - A20
+    - A21
+  checks:
+    - name:
+        text: full pytest and coverage
+        truncated: false
+      result: passed
+      note:
+        text: 218 passed; 91.18% branch coverage; one existing Starlette/httpx
+          deprecation warning
+        truncated: false
+    - name:
+        text: workspace validation
+        truncated: false
+      result: passed
+      note:
+        text: scripts/validate_workspace.py
+        truncated: false
+    - name:
+        text: Python compilation
+        truncated: false
+      result: passed
+      note:
+        text: python -m compileall -q src tests
+        truncated: false
+    - name:
+        text: frontend syntax
+        truncated: false
+      result: passed
+      note:
+        text: node --check frontend/app.js
+        truncated: false
+    - name:
+        text: dependency consistency
+        truncated: false
+      result: passed
+      note:
+        text: python -m pip check
+        truncated: false
+    - name:
+        text: diff whitespace
+        truncated: false
+      result: passed
+      note:
+        text: git diff --check
+        truncated: false
+    - name:
+        text: local MySQL dialect verification
+        truncated: false
+      result: passed
+      note:
+        text: SQLAlchemy mysql+pymysql dialect and InnoDB/LONGTEXT DDL metadata
+          inspected without connecting
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: 未连接真实 MySQL，不证明生产网络、账号权限、备份或实际容量配置。
+      truncated: false
+    - text: 容量限制是单进程信号量，不是跨多 worker 的全局租约。
+      truncated: false
+    - text: 本 change 不增加认证、租户隔离、任务队列或后台 202 + run_id 模型。
+      truncated: false
+    - text: 首次启动自动创建空的 test_runs 表，不自动迁移既有 SQLite 数据；生产迁移与部署需单独审批。
+      truncated: false
+  known_limits_truncated: false
+  submitted_at: 2026-08-14T12:09:21.840Z
+blockers: []
+verification:
+  candidate_id: 8d8afff8-fa31-446e-b0da-efa297134510
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:488f714c-60a7-4fda-a1a1-b03ac3ef1cbb
+  iteration: 1
+  attempt: 1
+  assurance: skill-coordinated
+  verdict: pass
+  checks: []
+  summary:
+    text: 独立只读验证确认 A1–A21 全部满足本地可验收要求；全量 218 tests passed，分支覆盖率 91.18%，Python
+      编译、前端语法、pip check、工作区校验和 git diff --check 均通过。未读取 .env、未连接真实 MySQL、未修改文件。
+    truncated: false
+  risks:
+    - text: 未验证真实 MySQL 网络、账号权限、连接池、实际建表和生产容量。
+      truncated: false
+    - text: 并发限制是单进程信号量，不是跨多 worker 的全局限制。
+      truncated: false
+    - text: 本 change 不包含认证、租户隔离、MySQL 任务队列或后台异步任务模型。
+      truncated: false
+    - text: 现有 SQLite 数据不会自动迁移到 MySQL；生产迁移和部署仍需单独审批。
+      truncated: false
+  risks_truncated: false
+  completed_at: 2026-08-14T12:26:04.121Z
+history:
+  - goal_cycle: 1
+    iteration: 1
+    attempt: 1
+    outcome: pass
+    unresolved_ids: []
+    summary:
+      text: 独立只读验证确认 A1–A21 全部满足本地可验收要求；全量 218 tests passed，分支覆盖率 91.18%，Python
+        编译、前端语法、pip check、工作区校验和 git diff --check 均通过。未读取 .env、未连接真实
+        MySQL、未修改文件。
+      truncated: false
+    completed_at: 2026-08-14T12:26:04.121Z
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pass
+verification_report: verification.md
+archived: true
+created_at: 2026-08-14T10:39:26.710Z

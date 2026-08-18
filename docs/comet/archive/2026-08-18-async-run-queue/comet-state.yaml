@@ -1,0 +1,628 @@
+schema: comet.native.v4
+name: async-run-queue
+language: zh-CN
+phase: archive
+status: done
+state_version: 19
+brief: brief.md
+spec_changes:
+  - capability: async-run-queue
+    operation: create
+    source: specs/async-run-queue/spec.md
+workspace:
+  isolation: current
+  change_branch: feature/task-oriented-console
+  target_branch: feature/task-oriented-console
+  finish: null
+loop:
+  stage: done
+  goal_cycle: 1
+  iteration: 3
+  attempt: 2
+  retry_epoch: 0
+  failed_iteration_count: 2
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: null
+acceptance:
+  - id: A1
+    source: brief.md
+    text: "A1: 配置合法 `REDIS_URL` 后，异步提交服务可初始化 Redis Streams consumer group；缺少 Redis
+      配置或 Redis 不可用时，异步提交返回稳定的 503 `ASYNC_RUNS_UNAVAILABLE`，不执行目标请求。"
+    result: passed
+    reason:
+      text: Redis configuration and stable unavailable-queue handling are implemented
+        and covered by tests.
+      truncated: false
+  - id: A2
+    source: brief.md
+    text: "A2: 合法请求调用 `POST /api/v1/runs/async` 时返回 202、UUIDv4 `run_id`、`status_url`
+      和 `queued` 状态；API 请求线程不调用 `TestExecutor`。"
+    result: passed
+    reason:
+      text: Async submission returns 202 with UUIDv4 run_id, status URL, and queued
+        state without executing the target.
+      truncated: false
+  - id: A3
+    source: brief.md
+    text: "A3: `GET /api/v1/runs/{run_id}/status` 能反映 queued、running、completed 和
+      failed 状态；未完成任务不会被伪装成已完成结果。"
+    result: passed
+    reason:
+      text: Status responses expose queued, running, completed, and failed state
+        transitions without a fake terminal result.
+      truncated: false
+  - id: A4
+    source: brief.md
+    text: "A4: 多个 Worker 使用同一个 Redis consumer group
+      时，每个任务最多只有一个有效执行令牌；重复投递不会产生重复目标请求或重复历史记录。"
+    result: passed
+    reason:
+      text: Consumer-group delivery is guarded by database claim tokens, owner checks,
+        state versions, and duplicate handling.
+      truncated: false
+  - id: A5
+    source: brief.md
+    text: "A5: Worker 并发数是有界的；多个 Worker 实例的总执行数由 Redis 队列消费和任务租约共同限制，不依赖单个进程内信号量。"
+    result: passed
+    reason:
+      text: Worker-local slots and Redis global capacity leases are bounded; capacity
+        lease duration uses the effective job lease.
+      truncated: false
+  - id: A6
+    source: brief.md
+    text: "A6: API 创建 MySQL 任务记录后，即使首次 Redis 发布暂时失败，Outbox dispatcher
+      也能重试发布，任务不会永久丢失。"
+    result: passed
+    reason:
+      text: Job and outbox rows are created transactionally and the dispatcher retries
+        pending publications.
+      truncated: false
+  - id: A7
+    source: brief.md
+    text: "A7: Worker 崩溃或租约过期后，另一 Worker 能接管未确认消息；接管遵循最大尝试次数并避免并发重复执行。"
+    result: passed
+    reason:
+      text: Expired messages are reclaimable with bounded attempts, recovery events,
+        and conditional owner/version claims.
+      truncated: false
+  - id: A8
+    source: brief.md
+    text: "A8: TestExecutor 返回测试失败结果时，任务状态为 completed，结果的 `passed` 为
+      false；基础设施异常在重试耗尽后才进入 failed，并返回脱敏稳定错误。"
+    result: passed
+    reason:
+      text: Assertion failures remain completed with passed=false; infrastructure
+        result codes and executor exceptions use bounded retry then failed.
+      truncated: false
+  - id: A9
+    source: brief.md
+    text: "A9: 任务完成后只把已经脱敏的 `TestRunResult` 保存到历史；请求载荷不出现在 `test_runs`
+      或状态响应中，并在完成后删除或依 TTL 过期。"
+    result: passed
+    reason:
+      text: Only result data is saved to history; async request payloads remain
+        temporary Redis data with TTL and terminal cleanup.
+      truncated: false
+  - id: A10
+    source: brief.md
+    text: "A10: 现有同步 `POST /api/v1/runs`、历史列表、详情和报告 API 继续通过原有回归测试；单个 run 内仍按依赖顺序串行。"
+    result: passed
+    reason:
+      text: Existing synchronous API, history routes, and sequential execution
+        regression tests pass.
+      truncated: false
+  - id: A11
+    source: brief.md
+    text: "A11: MySQL 表定义使用 InnoDB、参数化事务和稳定唯一键；未配置 MySQL 时本地 SQLite 测试仍可运行，但 SQLite
+      不宣称跨主机全局队列保证。"
+    result: passed
+    reason:
+      text: MySQL DDL uses InnoDB and stable keys; SQLite remains a documented local
+        fallback.
+      truncated: false
+  - id: A12
+    source: brief.md
+    text: "A12: 配置、Worker 启动、Redis Compose 演示、状态流转、重试、幂等、并发和错误脱敏均有自动化测试与文档说明。"
+    result: passed
+    reason:
+      text: Configuration, worker entrypoint, Compose example, documentation, and
+        automated coverage are present.
+      truncated: false
+  - id: A13
+    source: specs/async-run-queue/spec.md
+    text: asynchronous submission is accepted Given Redis is configured and
+      available And the request passes payload and target validation When a
+      client posts to `/api/v1/runs/async` Then the API returns 202 with a new
+      run id and queued status And no target request has been made And the job
+      and outbox records are durable.
+    result: passed
+    reason:
+      text: Valid async submission durably creates job/outbox state and returns queued
+        acceptance.
+      truncated: false
+  - id: A14
+    source: specs/async-run-queue/spec.md
+    text: queue dependency is unavailable Given Redis is missing or unavailable When
+      a client posts a valid asynchronous run Then the API returns 503 with
+      `ASYNC_RUNS_UNAVAILABLE` And it does not invoke `TestExecutor` And it does
+      not expose the Redis URL or driver error.
+    result: passed
+    reason:
+      text: Redis unavailability produces stable ASYNC_RUNS_UNAVAILABLE without
+        invoking the executor or exposing driver details.
+      truncated: false
+  - id: A15
+    source: specs/async-run-queue/spec.md
+    text: outbox publication is retried Given a job and outbox record were committed
+      And the first Redis publication fails When the dispatcher retries the
+      outbox entry Then exactly one logical run event becomes available to the
+      consumer group And the job remains recoverable until publication succeeds
+      or a safe terminal error is recorded.
+    result: passed
+    reason:
+      text: Outbox publication uses an atomic Redis Lua operation keyed by outbox_id,
+        so republishing yields one logical stream event.
+      truncated: false
+  - id: A16
+    source: specs/async-run-queue/spec.md
+    text: worker completes a run Given a queued job has a non-expired payload When a
+      worker claims its execution token and runs the executor Then the status
+      becomes completed And the already redacted result is saved once in history
+      And the stream entry is acknowledged And the payload key is removed or
+      left only until its TTL.
+    result: passed
+    reason:
+      text: Successful worker execution saves the result once, completes the job,
+        cleans payload when possible, and acknowledges the message.
+      truncated: false
+  - id: A17
+    source: specs/async-run-queue/spec.md
+    text: duplicate delivery is harmless Given the same stream event is delivered to
+      two workers When both attempt to claim the same job Then only one obtains
+      the current execution token And the other performs no target request And
+      history contains at most one result for the run id.
+    result: passed
+    reason:
+      text: Conditional claim and existing-history checks make duplicate delivery
+        harmless.
+      truncated: false
+  - id: A18
+    source: specs/async-run-queue/spec.md
+    text: crashed worker is recovered Given a worker owns a running job and stops
+      before acknowledgement When the execution lease expires and another worker
+      claims the pending entry Then the job is retried only within the
+      configured attempt limit And stale status updates from the old worker
+      cannot overwrite the new owner.
+    result: passed
+    reason:
+      text: Lease expiry creates a fenced recovery attempt; stale owner terminal and
+        history writes are rejected.
+      truncated: false
+  - id: A19
+    source: specs/async-run-queue/spec.md
+    text: "test assertion failure is a completed result Given the target requests
+      finish but one or more assertions fail When the worker persists the result
+      Then the job status is completed And the result has `passed: false` And
+      the API does not treat the test outcome as infrastructure failure."
+    result: passed
+    reason:
+      text: Test assertion failure is persisted as completed with passed=false.
+      truncated: false
+  - id: A20
+    source: specs/async-run-queue/spec.md
+    text: synchronous compatibility remains Given a client uses the existing
+      synchronous endpoint When it submits a valid run Then its request/response
+      shape and history behavior remain unchanged And cases within the run still
+      execute in dependency order.
+    result: passed
+    reason:
+      text: Synchronous endpoint shape and dependency-order behavior remain covered by
+        regression tests.
+      truncated: false
+  - id: A21
+    source: specs/async-run-queue/spec.md
+    text: sensitive request data is bounded Given an asynchronous request contains
+      headers, request bodies, or secret variables When the job is queued and
+      completed Then those values are absent from `test_runs` and status
+      responses And the temporary payload is subject to its configured TTL.
+    result: passed
+    reason:
+      text: Request payloads are held under finite Redis TTL and excluded from history
+        and status schemas.
+      truncated: false
+  - id: A22
+    source: specs/async-run-queue/spec.md
+    text: The platform keeps the existing synchronous run API and adds a durable
+      asynchronous execution path backed by Redis Streams and MySQL job state.
+    result: passed
+    reason:
+      text: The implementation adds Redis Streams plus durable job state while
+        retaining the synchronous API.
+      truncated: false
+  - id: A23
+    source: specs/async-run-queue/spec.md
+    text: "`POST /api/v1/runs/async` accepts the existing `TestRunRequest` after the
+      same payload and target validation. It returns HTTP 202 with a UUIDv4
+      `run_id`, `status: queued`, and a status URL. It never executes the target
+      request in the API handler."
+    result: passed
+    reason:
+      text: Async endpoint validates the existing request model and returns 202,
+        UUIDv4, queued, and status_url.
+      truncated: false
+  - id: A24
+    source: specs/async-run-queue/spec.md
+    text: "`GET /api/v1/runs/{run_id}/status` returns a safe status document
+      containing only the run id, state, attempt count, timestamps, and
+      sanitized terminal error information. A queued or running job is not
+      represented as a completed `TestRunResult`."
+    result: passed
+    reason:
+      text: Status schema contains safe state, attempt, timestamps, and sanitized
+        terminal error fields only.
+      truncated: false
+  - id: A25
+    source: specs/async-run-queue/spec.md
+    text: The persistent job state has the states `queued`, `running`, `completed`,
+      and `failed`. A test run whose assertions fail is `completed` with a
+      result whose `passed` is false. Infrastructure failures become `failed`
+      only after retry policy is exhausted.
+    result: passed
+    reason:
+      text: Persistent states and terminal semantics are implemented; infrastructure
+        failures reach failed only after retry exhaustion.
+      truncated: false
+  - id: A26
+    source: specs/async-run-queue/spec.md
+    text: MySQL persists `run_jobs` and `run_outbox` in InnoDB tables. SQLite
+      remains a local test/demo fallback, but the service does not claim
+      cross-host queue guarantees for SQLite.
+    result: passed
+    reason:
+      text: run_jobs and run_outbox declare InnoDB for MySQL and use SQLite only as a
+        local fallback.
+      truncated: false
+  - id: A27
+    source: specs/async-run-queue/spec.md
+    text: The API transaction creates one job and one outbox record. A dispatcher
+      publishes a stream entry containing only `run_id`, attempt, and state
+      version. A temporary Redis payload key holds the validated execution
+      request with a finite TTL and is deleted on terminal completion when
+      possible.
+    result: passed
+    reason:
+      text: Transactional job/outbox creation, minimal stream fields, temporary
+        payload key, TTL, and cleanup are implemented.
+      truncated: false
+  - id: A28
+    source: specs/async-run-queue/spec.md
+    text: Workers consume one Redis Streams consumer group. A worker must acquire a
+      database-backed execution token/version before invoking `TestExecutor`.
+      Updates with a stale token are ignored, making redelivery idempotent.
+    result: passed
+    reason:
+      text: Workers claim a database execution token before TestExecutor and fence
+        stale versions on updates.
+      truncated: false
+  - id: A29
+    source: specs/async-run-queue/spec.md
+    text: Workers acknowledge successful terminal handling. Transient infrastructure
+      errors are retried with bounded attempts; unacknowledged messages whose
+      execution lease expired can be claimed by another worker. A permanently
+      missing or expired payload is a sanitized terminal failure.
+    result: passed
+    reason:
+      text: Terminal handling acknowledges messages; transient infrastructure errors
+        retry with bounded attempts and missing payloads fail safely.
+      truncated: false
+  - id: A30
+    source: specs/async-run-queue/spec.md
+    text: The aggregate number of active asynchronous executions is bounded by
+      worker configuration and job lease ownership, rather than by an
+      API-process semaphore. A worker must not start work beyond its configured
+      local bound.
+    result: passed
+    reason:
+      text: Aggregate async execution is bounded by Redis capacity leases and each
+        worker's local concurrency limit.
+      truncated: false
+  - id: A31
+    source: specs/async-run-queue/spec.md
+    text: Existing `POST /api/v1/runs`, run history routes, redaction behavior, SSRF
+      policy, and sequential dependency execution remain compatible.
+    result: passed
+    reason:
+      text: Existing API, SSRF policy, redaction, history, and dependency-order
+        regression tests pass.
+      truncated: false
+  - id: A32
+    source: specs/async-run-queue/spec.md
+    text: Redis connection strings, MySQL credentials, request targets, headers,
+      query values, bodies, variables, and raw driver errors must not be written
+      to run history or returned by status/error APIs.
+    result: passed
+    reason:
+      text: Queue events and status/error paths use safe fields and stable messages;
+        secrets, targets, and raw driver errors are not persisted.
+      truncated: false
+builder_handoff:
+  candidate_id: 368747ac-7e3e-430b-9495-99a070cb63da
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:5a9d6333-da2e-4c8c-9260-ed6b5c790970
+  iteration: 3
+  summary:
+    text: 本轮修复了独立 Verifier 指出的 10 个失败验收项：capacity lease 现在使用有效 job lease，capacity
+      member 每次 acquisition 独立；Redis outbox 发布使用以 outbox_id 为幂等键的原子 Lua 脚本；异步
+      Worker 将 REQUEST_TIMEOUT、CONNECT_FAILED 和 NETWORK_ERROR 结果按基础设施失败重试并在耗尽后进入
+      failed；历史写入改为在同一数据库事务中校验 run_jobs 的当前 owner、state_version 和未过期 lease
+      后再插入。保留同步 executor 的结构化断言/网络结果行为，异步路径只对基础设施错误走重试。
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+    - A5
+    - A6
+    - A7
+    - A8
+    - A9
+    - A10
+    - A11
+    - A12
+    - A13
+    - A14
+    - A15
+    - A16
+    - A17
+    - A18
+    - A19
+    - A20
+    - A21
+    - A22
+    - A23
+    - A24
+    - A25
+    - A26
+    - A27
+    - A28
+    - A29
+    - A30
+    - A31
+    - A32
+  checks:
+    - name:
+        text: focused async Worker and Redis regressions
+        truncated: false
+      result: passed
+      note:
+        text: 31 passed.
+        truncated: false
+    - name:
+        text: queue/history plus async regression subset
+        truncated: false
+      result: passed
+      note:
+        text: 49 passed.
+        truncated: false
+    - name:
+        text: full pytest regression
+        truncated: false
+      result: passed
+      note:
+        text: 281 passed; one existing Starlette/httpx deprecation warning.
+        truncated: false
+    - name:
+        text: branch coverage gate
+        truncated: false
+      result: passed
+      note:
+        text: 90.23% branch coverage with --cov-fail-under=90.
+        truncated: false
+    - name:
+        text: Python compilation
+        truncated: false
+      result: passed
+      note:
+        text: compileall exited 0.
+        truncated: false
+    - name:
+        text: dependency consistency
+        truncated: false
+      result: passed
+      note:
+        text: pip check reported no broken requirements.
+        truncated: false
+    - name:
+        text: workspace validation
+        truncated: false
+      result: passed
+      note:
+        text: validate_workspace.py exited 0.
+        truncated: false
+    - name:
+        text: diff whitespace
+        truncated: false
+      result: passed
+      note:
+        text: git diff --check exited 0; only existing LF/CRLF normalization warnings
+          were reported.
+        truncated: false
+    - name:
+        text: frontend syntax
+        truncated: false
+      result: passed
+      note:
+        text: node --check frontend/app.js exited 0.
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: Verification uses fakeredis and local SQLite fixtures; no real Redis or
+        MySQL connection was started.
+      truncated: false
+    - text: No authentication, tenant isolation, user quotas, production migration,
+        deployment, push, or PR is included.
+      truncated: false
+    - text: The legacy synchronous endpoint keeps its process-local limiter; the async
+        path provides the cross-Worker Redis global bound.
+      truncated: false
+    - text: The repository retains the existing Starlette/httpx deprecation warning in
+        the test environment.
+      truncated: false
+    - text: Redis outbox dedupe keys are intentionally retained for the lifetime of
+        the Redis data set; stream/key retention policy remains a deployment
+        concern.
+      truncated: false
+  known_limits_truncated: false
+  submitted_at: 2026-08-18T12:23:12.465Z
+blockers: []
+verification:
+  candidate_id: 368747ac-7e3e-430b-9495-99a070cb63da
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:cb23ef5f-8d94-4646-b8ad-6ff72145a290
+  iteration: 3
+  attempt: 2
+  assurance: skill-coordinated
+  verdict: pass
+  checks: []
+  summary:
+    text: "Current candidate passes the focused queue/worker/storage checks and the
+      full regression suite: 281 passed with 90.23% branch coverage. The four
+      prior failure groups are addressed by effective capacity leases,
+      fencing-aware history writes and terminal transitions, bounded
+      infrastructure retries, and atomic outbox_id publication deduplication."
+    truncated: false
+  risks:
+    - text: Verification used fakeredis and local SQLite fixtures; no real Redis or
+        MySQL connection was started.
+      truncated: false
+    - text: The existing Starlette/httpx deprecation warning remains in the test
+        environment.
+      truncated: false
+    - text: The legacy synchronous endpoint retains its process-local limiter;
+        cross-worker global capacity applies to the async path.
+      truncated: false
+    - text: Redis outbox dedupe keys are retained for the Redis dataset lifetime and
+        need an operational retention policy.
+      truncated: false
+  risks_truncated: false
+  completed_at: 2026-08-18T12:43:22.342Z
+history:
+  - goal_cycle: 1
+    iteration: 1
+    attempt: 1
+    outcome: fail
+    unresolved_ids:
+      - A7
+      - A9
+      - A18
+      - A21
+      - A27
+      - A28
+      - A29
+      - A32
+    summary:
+      text: The first independent verification failed on lease-recovery fencing,
+        malformed Redis counter handling and Worker isolation, and recursive
+        redaction of nested dictionary/array secrets. The Builder repair added
+        recovery fencing and recovery outbox events, rejects negative stream
+        counters, attaches message_id to malformed-message errors so Workers can
+        ACK and isolate them, prevents terminal writes after lease expiry, and
+        recursively flattens nested secret values. Fresh local focused and full
+        verification now passes; Runtime should return to Build for a new
+        Builder handoff and independent Verify.
+      truncated: false
+    completed_at: 2026-08-18T11:10:51.822Z
+  - goal_cycle: 1
+    iteration: 2
+    attempt: 1
+    outcome: execution-error
+    unresolved_ids: []
+    summary:
+      text: The independent Verifier was dispatched at 2026-08-18T11:12:20Z with an
+        empty resolved check plan. After more than ten minutes, Runtime still
+        reports localExecution.status=running and verificationResult=pending,
+        with no verifier result, check log, or active local verifier process. A
+        separate read-only verifier attempt also did not return and was shut
+        down. Local Builder checks are complete, but no independent semantic
+        verdict is available.
+      truncated: false
+    completed_at: 2026-08-18T11:32:49.623Z
+  - goal_cycle: 1
+    iteration: 2
+    attempt: 2
+    outcome: execution-error
+    unresolved_ids: []
+    summary:
+      text: The independent Verifier for iteration 2 attempt 2 was dispatched with an
+        empty resolved check plan. After repeated status polls, Runtime still
+        reports localExecution.status=running and verificationResult=pending,
+        but no verifier result, check log, or active local verifier process is
+        present. Local Builder checks are complete, but no independent semantic
+        verdict is available.
+      truncated: false
+    completed_at: 2026-08-18T11:38:03.516Z
+  - goal_cycle: 1
+    iteration: 2
+    attempt: 3
+    outcome: fail
+    unresolved_ids:
+      - A5
+      - A7
+      - A8
+      - A9
+      - A15
+      - A16
+      - A18
+      - A25
+      - A29
+      - A30
+    summary:
+      text: 独立只读审查判定 fail。主要问题位于全局容量租约与有效 job lease 不一致、heartbeat
+        丢失后的结果/历史写入竞态、基础设施网络错误错误归类为 completed，以及 outbox 发布缺少严格幂等保护。Builder
+        报告的本地测试通过未作为本次独立新鲜执行依据；未连接真实 Redis/MySQL。
+      truncated: false
+    completed_at: 2026-08-18T11:49:03.922Z
+  - goal_cycle: 1
+    iteration: 3
+    attempt: 1
+    outcome: execution-error
+    unresolved_ids: []
+    summary:
+      text: The independent read-only Verifier for iteration 3 attempt 1 was
+        dispatched, but after repeated bounded waits it remained running without
+        returning a semantic result. It was stopped to avoid an unbounded
+        verifier execution. No independent pass/fail verdict is available; local
+        Builder checks remain available but are not treated as independent
+        verification.
+      truncated: false
+    completed_at: 2026-08-18T12:32:20.774Z
+  - goal_cycle: 1
+    iteration: 3
+    attempt: 2
+    outcome: pass
+    unresolved_ids: []
+    summary:
+      text: "Current candidate passes the focused queue/worker/storage checks and the
+        full regression suite: 281 passed with 90.23% branch coverage. The four
+        prior failure groups are addressed by effective capacity leases,
+        fencing-aware history writes and terminal transitions, bounded
+        infrastructure retries, and atomic outbox_id publication deduplication."
+      truncated: false
+    completed_at: 2026-08-18T12:43:22.342Z
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pass
+verification_report: verification.md
+archived: true
+created_at: 2026-08-18T08:36:03.074Z

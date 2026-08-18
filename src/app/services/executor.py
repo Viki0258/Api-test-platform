@@ -38,6 +38,11 @@ def read_json_path(document: Any, path: str) -> Any:
 
 def redact(value: Any, secret_values: list[Any]) -> Any:
     """Remove declared secret values from structured result fields."""
+    normalized_secrets = _flatten_secret_values(secret_values)
+    return _redact(value, normalized_secrets)
+
+
+def _redact(value: Any, secret_values: list[Any]) -> Any:
     for secret in secret_values:
         if value == secret and secret is not None:
             return REDACTION_MARKER
@@ -48,13 +53,25 @@ def redact(value: Any, secret_values: list[Any]) -> Any:
                 redacted = redacted.replace(secret, REDACTION_MARKER)
         return redacted
     if isinstance(value, list):
-        return [redact(item, secret_values) for item in value]
+        return [_redact(item, secret_values) for item in value]
     if isinstance(value, dict):
         return {
-            key: redact(item, secret_values)
+            key: _redact(item, secret_values)
             for key, item in value.items()
         }
     return value
+
+
+def _flatten_secret_values(values: list[Any]) -> list[Any]:
+    flattened: list[Any] = []
+    for value in values:
+        if isinstance(value, dict):
+            flattened.extend(_flatten_secret_values(list(value.values())))
+        elif isinstance(value, list):
+            flattened.extend(_flatten_secret_values(value))
+        else:
+            flattened.append(value)
+    return flattened
 
 
 class TestExecutor:

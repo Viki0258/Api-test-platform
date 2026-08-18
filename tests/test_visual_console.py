@@ -128,6 +128,62 @@ def test_frontend_has_no_external_resource_or_network_reference() -> None:
     assert "@import" not in source
 
 
+def test_console_exposes_the_five_step_task_workflow() -> None:
+    html = client.get("/").text
+
+    expected_steps = (
+        ("source", "#openapi-generator"),
+        ("generation", "#ai-assistant"),
+        ("review", "#candidate-review"),
+        ("execution", "#test-execution"),
+        ("history", "#recent-runs"),
+    )
+    for step, href in expected_steps:
+        matching_tag = re.search(
+            rf"""<a\b[^>]*\bdata-workflow-step=["']{step}["'][^>]*>""",
+            html,
+        )
+        assert matching_tag
+        assert re.search(
+            rf"""\bhref=["']{re.escape(href)}["']""",
+            matching_tag.group(0),
+        )
+
+    for element_id in (
+        "workflow-guidance",
+        "guidance-title",
+        "guidance-copy",
+        "guidance-action",
+    ):
+        assert f'id="{element_id}"' in html
+
+
+def test_openapi_source_is_disclosed_on_demand() -> None:
+    html = client.get("/").text
+
+    assert re.search(
+        r"""<details\b[^>]*\bid=["']openapi-source-details["'][^>]*>"""
+        r"""(?:(?!</details>).)*<textarea\b[^>]*\bid=["']openapi-editor["']""",
+        html,
+        re.DOTALL,
+    )
+
+
+def test_workflow_guidance_is_state_driven_without_auto_execution() -> None:
+    javascript = (frontend_directory / "app.js").read_text(encoding="utf-8")
+    guidance = javascript[
+        javascript.index("function updateWorkflowGuidance")
+        : javascript.index("function createOpenApiDemo")
+    ]
+
+    for state in ("source", "generation", "review", "execution", "history"):
+        assert f'"{state}"' in guidance
+    assert "reviewCandidates.length" in guidance
+    assert "reviewedCandidatesLoaded" in guidance
+    assert "runHasCompleted" in guidance
+    assert "runTests(" not in guidance
+
+
 def test_console_exposes_recent_run_dom_and_accessible_status_contracts() -> None:
     html = client.get("/").text
 

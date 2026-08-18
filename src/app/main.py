@@ -11,6 +11,8 @@ from app.schemas import (
     AiGenerateRequest,
     AiGenerateResponse,
     AiProviderStatus,
+    AsyncRunAccepted,
+    AsyncRunStatus,
     OpenApiGenerateRequest,
     OpenApiGenerateResponse,
     TestRunHistoryList,
@@ -18,6 +20,11 @@ from app.schemas import (
     TestRunResult,
 )
 from app.services.ai_assistant import AiAssistantError, AiAssistantService
+from app.services.async_run_service import (
+    AsyncRunService,
+    AsyncRunServiceError,
+)
+from app.services.concurrency import RunCapacityLimiter
 from app.services.executor import TestExecutor
 from app.services.openapi_generator import (
     OpenApiGenerationError,
@@ -28,6 +35,8 @@ from app.services.report_renderer import (
     REPORT_CONTENT_SECURITY_POLICY,
     render_test_run_report,
 )
+from app.services.redis_run_queue import RedisRunQueue
+from app.services.run_queue_store import RunQueueStore
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIRECTORY = REPOSITORY_ROOT / "frontend"
@@ -45,8 +54,57 @@ app.mount(
 
 
 @lru_cache
-def get_run_history_store() -> RunHistoryStore:
-    return RunHistoryStore()
+def _build_run_history_store(database_url: str | None) -> RunHistoryStore:
+    return RunHistoryStore(database_url=database_url)
+
+
+def get_run_history_store(
+    settings: Settings = Depends(get_settings),
+) -> RunHistoryStore:
+    return _build_run_history_store(settings.database_url)
+
+
+@lru_cache
+def _build_run_queue_store(database_url: str | None) -> RunQueueStore:
+    return RunQueueStore(database_url=database_url)
+
+
+def get_run_queue_store(
+    settings: Settings = Depends(get_settings),
+) -> RunQueueStore:
+    return _build_run_queue_store(settings.database_url)
+
+
+@lru_cache
+def _build_redis_run_queue(
+    redis_url: str | None,
+    stream_name: str,
+    consumer_group: str,
+) -> RedisRunQueue:
+    return RedisRunQueue(redis_url, stream_name, consumer_group)
+
+
+def get_redis_run_queue(
+    settings: Settings = Depends(get_settings),
+) -> RedisRunQueue:
+    return _build_redis_run_queue(
+        settings.redis_url,
+        settings.async_stream_name,
+        settings.async_consumer_group,
+    )
+
+
+def get_async_run_service(
+    settings: Settings = Depends(get_settings),
+    queue: RedisRunQueue = Depends(get_redis_run_queue),
+    store: RunQueueStore = Depends(get_run_queue_store),
+) -> AsyncRunService:
+    return AsyncRunService(settings, queue, store)
+
+
+@lru_cache
+def get_run_capacity_limiter() -> RunCapacityLimiter:
+    return RunCapacityLimiter(get_settings().max_concurrent_runs)
 
 
 def get_ai_assistant(
@@ -134,6 +192,7 @@ def create_test_run(
     payload: TestRunRequest,
     settings: Settings = Depends(get_settings),
     history_store: RunHistoryStore = Depends(get_run_history_store),
+    capacity_limiter: RunCapacityLimiter = Depends(get_run_capacity_limiter),
 ) -> TestRunResult:
     base_url = str(payload.base_url)
     if not target_is_allowed(base_url, settings):
@@ -144,27 +203,78 @@ def create_test_run(
                 "message": "base_url origin is not allowed",
             },
         )
-    executor = TestExecutor(
-        timeout_seconds=settings.request_timeout_seconds,
-        run_budget_seconds=settings.run_budget_seconds,
-    )
-    result = executor.run(
-        base_url,
-        payload.cases,
-        variables=payload.variables,
-        secret_variables=payload.secret_variables,
-    )
-    try:
-        history_store.save(result)
-    except HistoryStorageError:
+    if not capacity_limiter.try_acquire():
         raise HTTPException(
-            status_code=503,
+            status_code=429,
+            headers={"Retry-After": "1"},
             detail={
-                "code": "HISTORY_PERSISTENCE_FAILED",
-                "message": "test run completed but history could not be saved",
+                "code": "RUN_CAPACITY_EXCEEDED",
+                "message": "run capacity is temporarily exhausted",
             },
+        )
+
+    try:
+        executor = TestExecutor(
+            timeout_seconds=settings.request_timeout_seconds,
+            run_budget_seconds=settings.run_budget_seconds,
+        )
+        result = executor.run(
+            base_url,
+            payload.cases,
+            variables=payload.variables,
+            secret_variables=payload.secret_variables,
+        )
+        try:
+            history_store.save(result)
+        except HistoryStorageError:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "HISTORY_PERSISTENCE_FAILED",
+                    "message": "test run completed but history could not be saved",
+                },
+            ) from None
+        return result
+    finally:
+        capacity_limiter.release()
+
+
+@app.post(
+    "/api/v1/runs/async",
+    response_model=AsyncRunAccepted,
+    status_code=202,
+    tags=["test-runs"],
+)
+def create_async_test_run(
+    payload: TestRunRequest,
+    service: AsyncRunService = Depends(get_async_run_service),
+) -> AsyncRunAccepted:
+    try:
+        return service.submit(payload)
+    except AsyncRunServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
         ) from None
-    return result
+
+
+@app.get(
+    "/api/v1/runs/{run_id}/status",
+    response_model=AsyncRunStatus,
+    tags=["test-runs"],
+)
+def get_async_run_status(
+    run_id: str,
+    service: AsyncRunService = Depends(get_async_run_service),
+) -> AsyncRunStatus:
+    parsed_run_id = _parse_run_id(run_id)
+    try:
+        return service.status(parsed_run_id)
+    except AsyncRunServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from None
 
 
 @app.get(

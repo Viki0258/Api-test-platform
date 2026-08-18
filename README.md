@@ -17,7 +17,8 @@
 - AI 输入先移除示例值、默认值、认证信息和敏感字段，输出经严格校验并必须人工确认
 - 缺失变量、提取失败和网络异常返回结构化错误
 - 结果只报告成功提取的变量名，不返回变量值或完整请求头
-- 使用项目内 SQLite 保存已脱敏运行结果，支持最近记录和详情查询
+- 默认使用项目内 SQLite 保存已脱敏运行结果，也可通过 DATABASE_URL 切换到 MySQL，支持最近记录和详情查询
+- 支持多个客户端并发运行；默认最多同时执行 4 个 run，容量耗尽返回 429 并带 Retry-After
 - 支持从已脱敏历史记录下载独立、离线可读的静态 HTML 测试报告
 - 每次运行返回 UUIDv4 `run_id` 和 UTC `created_at`
 - 默认拒绝所有网络目标；本地目标和其他目标都必须显式允许
@@ -62,6 +63,8 @@ api-test-platform/
 ```powershell
 .\.venv\Scripts\Activate.ps1
 $env:ALLOW_LOCAL_TARGETS = 'true'
+# 可选：$env:MAX_CONCURRENT_RUNS = '4'
+# 可选：$env:DATABASE_URL = 'mysql+pymysql://user:password@mysql-host/api_test'
 uvicorn app.main:app --app-dir src --reload
 ```
 
@@ -135,10 +138,20 @@ Header/Cookie 参数及疑似密钥字段。模型输出仍是不可信输入：
 - `GET /api/v1/runs/{run_id}`：返回一条已保存的完整安全结果。
 - `GET /api/v1/runs/{run_id}/report`：下载由该安全结果生成的 UTF-8 HTML 报告。
 
-历史数据库固定保存在 `.data/run-history.sqlite3`，最多保留500条，并已被 Git 忽略。平台只保存
-已经过脱敏的 `TestRunResult`，不会保存 `base_url`、请求头、查询参数、请求体或运行变量上下文。
+未设置 DATABASE_URL 时，历史数据库保存在 `.data/run-history.sqlite3`，最多保留500条，并已被 Git 忽略。
+设置 DATABASE_URL=mysql+pymysql://... 后使用 MySQL InnoDB 的 `test_runs` 表和排序索引；首次启动会
+自动创建本 change 需要的空表，不会自动迁移现有 SQLite 数据。平台只保存已经过脱敏的 `TestRunResult`，
+不会保存 `base_url`、请求头、查询参数、请求体或运行变量上下文。
 未声明为 secret 的断言值仍可能进入历史，因此测试令牌等敏感变量必须加入 `secret_variables`。
-SQLite 历史只适合本机单用户演示，不应当作生产数据库使用。
+MySQL 凭据只能放在未提交的 `.env` 中；不要把连接串写入代码、日志或错误响应。
+
+`MAX_CONCURRENT_RUNS` 默认为4，限制单个应用进程内正在执行的 run 数量。每个 run 内仍按依赖顺序串行，
+独立客户端可以并行执行；容量满时不会排队，`POST /api/v1/runs` 返回 `429 RUN_CAPACITY_EXCEEDED`，
+并通过 `Retry-After` 告知客户端稍后重试。该限制不等同于多 worker 的全局租约，跨 worker 容量控制属于后续变更。
+
+数据库变更边界：前向操作是创建 `test_runs` 表及 `created_at, sequence` 排序索引，初始数据为空；
+回滚前必须备份 MySQL，并且只能在单独审批后删除本 change 创建的对象。生产数据库连接、迁移和部署不在本地
+验证范围内。
 
 HTML 报告只读取历史中的 `TestRunResult`，不会重新读取 `base_url`、请求头、请求体、变量值或原始响应。
 报告不包含 JavaScript、表单、外链和外部资源，动态文本会先限制长度再进行 HTML 转义；下载响应使用
@@ -309,3 +322,66 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 4. OpenAPI 用例生成的边界场景扩展与人工确认流程
 5. GitHub Actions、Docker Compose 和独立演示被测服务
 6. AI 失败日志总结、更多 Provider 适配器与生成质量评估
+## Asynchronous run queue (multiple clients and Workers)
+
+The existing synchronous `POST /api/v1/runs` remains compatible. For long-running
+tests, use `POST /api/v1/runs/async`: it validates the same request, returns
+`202` with a UUIDv4 `run_id`, `status_url`, and `queued` status, and never calls
+`TestExecutor` in the API process. Poll `GET /api/v1/runs/{run_id}/status`; once
+the status is `completed`, use the existing detail or report endpoint.
+
+The async path uses Redis Streams for transport and MySQL `run_jobs` plus
+`run_outbox` for durable state and publication recovery. The full request is
+kept only in a Redis key with a finite TTL. History stores only the already
+redacted `TestRunResult`; request targets, headers, bodies, variables, and
+credentials are not returned by status or error responses.
+
+Key settings are `REDIS_URL`, `ASYNC_MAX_ACTIVE_RUNS` (shared Redis global
+execution bound), `ASYNC_WORKER_CONCURRENCY` (per-process bound),
+`ASYNC_JOB_LEASE_SECONDS`, `ASYNC_PAYLOAD_TTL_SECONDS`, and
+`ASYNC_MAX_ATTEMPTS`. Assertion failures are valid `completed` results with
+`passed: false`; infrastructure failures retry within the configured bound and
+then become sanitized `failed` tasks. Missing or unavailable Redis returns
+`503 ASYNC_RUNS_UNAVAILABLE` without accessing the target.
+
+For a local demonstration, start only the project-defined Redis service; it is
+not started automatically:
+
+```powershell
+docker compose up -d redis
+$env:REDIS_URL = 'redis://127.0.0.1:6379/0'
+$env:PYTHONPATH = (Join-Path (Get-Location) 'src')
+uvicorn app.main:app --reload
+```
+
+In another PowerShell window, launch the independent Worker with the same
+configuration:
+
+```powershell
+$env:REDIS_URL = 'redis://127.0.0.1:6379/0'
+$env:PYTHONPATH = (Join-Path (Get-Location) 'src')
+.\.venv\Scripts\python.exe -m app.worker
+```
+
+Submit and poll a run:
+
+```powershell
+$body = Get-Content '.\examples\demo-run.json' -Raw
+$accepted = Invoke-RestMethod `
+  -Method Post `
+  -Uri 'http://127.0.0.1:8000/api/v1/runs/async' `
+  -ContentType 'application/json' `
+  -Body $body
+$accepted
+
+$status = Invoke-RestMethod `
+  -Method Get `
+  -Uri ("http://127.0.0.1:8000{0}" -f $accepted.status_url)
+$status
+```
+
+For shared deployments, protect Redis with ACL/TLS and use `rediss://`; put
+credentials only in the uncommitted `.env`. Do not start production services,
+run migrations, or put real connection strings in source, logs, history, or
+status responses. SQLite remains a local test/demo fallback and does not claim
+cross-host queue guarantees.

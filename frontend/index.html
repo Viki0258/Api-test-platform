@@ -28,32 +28,83 @@
 
     <main id="main-content" class="shell">
       <section class="hero" aria-labelledby="page-title">
-        <div>
-          <p class="eyebrow">两步接口链路 · 一键验证</p>
-          <h1 id="page-title">不用手写请求，也能看懂接口测试</h1>
+        <div class="hero-main">
+          <p class="eyebrow">接口文档 → 测试方案 → 自动执行</p>
+          <h1 id="page-title">从接口文档到测试报告，一条流程完成</h1>
           <p class="hero-copy">
-            演示用例会先查询用户并提取变量，再将变量交给下一条用例。
-            平台负责发送请求、检查断言并汇总结果。
+            导入 OpenAPI 文档，生成基础用例和 AI 候选，人工审核后执行。
+            最终通过或失败始终由确定性断言判断，不交给模型决定。
           </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#openapi-generator">开始导入接口文档</a>
+            <button id="hero-load-demo" class="button button-secondary" type="button">
+              直接体验合成演示
+            </button>
+          </div>
         </div>
-        <div class="flow-card" aria-label="测试执行流程">
-          <span>发送请求</span>
-          <span aria-hidden="true">→</span>
-          <span>提取变量</span>
-          <span aria-hidden="true">→</span>
-          <span>验证结果</span>
+        <div class="hero-boundary" aria-label="平台工作边界">
+          <span class="hero-boundary-label">当前工作模式</span>
+          <strong>规则负责判定，AI只提供候选</strong>
+          <ul>
+            <li>生成和审核阶段不访问被测服务</li>
+            <li>密钥只留在后端，不进入浏览器</li>
+            <li>只有“运行测试”会真正发送请求</li>
+          </ul>
         </div>
       </section>
 
+      <nav class="workflow-nav" aria-label="测试工作流程">
+        <a class="workflow-step is-current" href="#openapi-generator" data-workflow-step="source">
+          <span>1</span>
+          <strong>导入文档</strong>
+          <small id="workflow-source-state">待开始</small>
+        </a>
+        <a class="workflow-step" href="#ai-assistant" data-workflow-step="generation">
+          <span>2</span>
+          <strong>生成方案</strong>
+          <small id="workflow-generation-state">待生成</small>
+        </a>
+        <a class="workflow-step" href="#candidate-review" data-workflow-step="review">
+          <span>3</span>
+          <strong>审核候选</strong>
+          <small id="workflow-review-state">0 条</small>
+        </a>
+        <a class="workflow-step" href="#test-execution" data-workflow-step="execution">
+          <span>4</span>
+          <strong>执行测试</strong>
+          <small id="workflow-execution-state">待运行</small>
+        </a>
+        <a class="workflow-step" href="#recent-runs" data-workflow-step="history">
+          <span>5</span>
+          <strong>历史报告</strong>
+          <small id="workflow-history-state">加载中</small>
+        </a>
+      </nav>
+
+      <aside
+        id="workflow-guidance"
+        class="workflow-guidance"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <span class="guidance-icon" aria-hidden="true">1</span>
+        <div>
+          <strong id="guidance-title">下一步：准备接口文档</strong>
+          <p id="guidance-copy">可以加载合成演示，或选择开发提供的 OpenAPI 3.0/3.1 JSON。</p>
+        </div>
+        <a id="guidance-action" href="#openapi-generator">前往导入</a>
+      </aside>
+
       <section
         id="openapi-generator"
-        class="panel openapi-panel"
+        class="panel openapi-panel stage-panel"
         aria-labelledby="openapi-title"
       >
         <div class="panel-heading">
           <div>
-            <p class="step-label">用例生成</p>
-            <h2 id="openapi-title">从 OpenAPI 生成基础用例</h2>
+            <p class="step-label">步骤 1 · 导入接口文档</p>
+            <h2 id="openapi-title">先让平台读懂有哪些接口</h2>
             <p class="openapi-intro">
               这里选择的 JSON 就是接口文档，但必须符合 OpenAPI 3.0/3.1。
               平台先生成可检查的正向用例草稿，不访问被测地址，也不自动运行。
@@ -85,18 +136,26 @@
               普通业务 JSON 和 Postman Collection 不能直接使用。
             </p>
 
-            <label class="field" for="openapi-editor">
-              <span>OpenAPI JSON</span>
-              <textarea
-                id="openapi-editor"
-                rows="18"
-                spellcheck="false"
-                aria-describedby="openapi-editor-help"
-              ></textarea>
-            </label>
-            <p id="openapi-editor-help" class="field-help">
-              仅支持 JSON 对象，不支持 YAML、外部引用或认证凭据生成。请勿放入真实密钥。
-            </p>
+            <details id="openapi-source-details" class="source-details">
+              <summary>
+                <span>查看或编辑 OpenAPI JSON</span>
+                <small>高级输入</small>
+              </summary>
+              <div class="source-details-content">
+                <label class="field" for="openapi-editor">
+                  <span>OpenAPI JSON</span>
+                  <textarea
+                    id="openapi-editor"
+                    rows="14"
+                    spellcheck="false"
+                    aria-describedby="openapi-editor-help"
+                  ></textarea>
+                </label>
+                <p id="openapi-editor-help" class="field-help">
+                  仅支持 JSON 对象，不支持 YAML、外部引用或认证凭据生成。请勿放入真实密钥。
+                </p>
+              </div>
+            </details>
 
             <div class="openapi-options">
               <label class="field" for="openapi-base-url">
@@ -185,13 +244,13 @@
 
       <section
         id="ai-assistant"
-        class="panel ai-panel"
+        class="panel ai-panel stage-panel"
         aria-labelledby="ai-title"
       >
         <div class="panel-heading">
           <div>
-            <p class="step-label">智能增强</p>
-            <h2 id="ai-title">可拔插 AI 测试助手</h2>
+            <p class="step-label">步骤 2 · 生成测试方案</p>
+            <h2 id="ai-title">基础规则打底，AI补充异常思路</h2>
             <p class="openapi-intro">
               基础生成器负责正向草稿，AI负责补充边界、异常和健壮性候选。
               默认 Mock 只演示流程；配置真实 Provider 后才由模型分析，密钥仍只存在后端。
@@ -265,13 +324,13 @@
 
       <section
         id="candidate-review"
-        class="panel review-panel"
+        class="panel review-panel stage-panel"
         aria-labelledby="candidate-review-title"
       >
         <div class="panel-heading">
           <div>
-            <p class="step-label">人工审核</p>
-            <h2 id="candidate-review-title">候选用例审核工作台</h2>
+            <p class="step-label">步骤 3 · 人工审核</p>
+            <h2 id="candidate-review-title">只保留值得执行的候选用例</h2>
             <p class="openapi-intro">
               基础草稿和 AI 候选会汇总到这里。先勾选、编辑并检查，再替换或追加到运行配置；
               整个审核过程不会发送测试请求。
@@ -317,12 +376,12 @@
         </p>
       </section>
 
-      <div class="workspace">
+      <div id="test-execution" class="workspace stage-workspace">
         <section class="panel configuration" aria-labelledby="config-title">
           <div class="panel-heading">
             <div>
-              <p class="step-label">步骤 01</p>
-              <h2 id="config-title">运行配置</h2>
+              <p class="step-label">步骤 4 · 执行测试</p>
+              <h2 id="config-title">确认目标与执行清单</h2>
             </div>
             <button id="restore-demo" class="button button-secondary" type="button">
               加载演示
@@ -395,8 +454,8 @@
         <section class="panel results-panel" aria-labelledby="results-title">
           <div class="panel-heading">
             <div>
-              <p class="step-label">步骤 02</p>
-              <h2 id="results-title">运行结果</h2>
+              <p class="step-label">确定性结果</p>
+              <h2 id="results-title">通过、失败与定位信息</h2>
             </div>
             <span id="overall-status" class="result-badge result-idle">等待运行</span>
           </div>
@@ -436,8 +495,8 @@
       <section id="recent-runs" class="panel history-panel" aria-labelledby="history-title">
         <div class="panel-heading">
           <div>
-            <p class="step-label">运行档案</p>
-            <h2 id="history-title">最近运行</h2>
+            <p class="step-label">步骤 5 · 历史与报告</p>
+            <h2 id="history-title">复盘最近运行</h2>
             <p class="history-intro">保存在本机的最近 10 条安全测试结果。</p>
           </div>
           <button id="refresh-history" class="button button-secondary" type="button">
@@ -458,23 +517,23 @@
       </section>
 
       <section class="explanation" aria-labelledby="explanation-title">
-        <p class="step-label">你正在看到什么？</p>
-        <h2 id="explanation-title">一次确定性的接口测试工作流</h2>
+        <p class="step-label">能力边界</p>
+        <h2 id="explanation-title">平台替你做什么，哪些仍由你确认</h2>
         <div class="explanation-grid">
           <article>
             <span>1</span>
-            <h3>查询与断言</h3>
-            <p>第一条用例请求演示用户，检查状态码、用户编号和名称。</p>
+            <h3>规则生成基础草稿</h3>
+            <p>从接口路径、参数、请求体和响应码生成可执行的正向用例。</p>
           </article>
           <article>
             <span>2</span>
-            <h3>提取与传递</h3>
-            <p>从响应中提取变量，由依赖关系安全传递给下一条用例。</p>
+            <h3>AI补充候选思路</h3>
+            <p>根据脱敏结构补充边界与异常候选，但不会自动接受或执行。</p>
           </article>
           <article>
             <span>3</span>
-            <h3>汇总与定位</h3>
-            <p>逐项展示断言和结构化错误，帮助快速定位失败原因。</p>
+            <h3>人工确认后再执行</h3>
+            <p>你决定执行哪些用例，规则引擎负责请求、断言、历史和报告。</p>
           </article>
         </div>
       </section>

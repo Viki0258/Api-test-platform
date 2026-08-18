@@ -48,6 +48,17 @@ const elements = {
   clearCandidateSelection: document.querySelector("#clear-candidate-selection"),
   replaceEditorCandidates: document.querySelector("#replace-editor-candidates"),
   appendEditorCandidates: document.querySelector("#append-editor-candidates"),
+  heroLoadDemo: document.querySelector("#hero-load-demo"),
+  openApiSourceDetails: document.querySelector("#openapi-source-details"),
+  workflowGuidance: document.querySelector("#workflow-guidance"),
+  guidanceTitle: document.querySelector("#guidance-title"),
+  guidanceCopy: document.querySelector("#guidance-copy"),
+  guidanceAction: document.querySelector("#guidance-action"),
+  workflowSourceState: document.querySelector("#workflow-source-state"),
+  workflowGenerationState: document.querySelector("#workflow-generation-state"),
+  workflowReviewState: document.querySelector("#workflow-review-state"),
+  workflowExecutionState: document.querySelector("#workflow-execution-state"),
+  workflowHistoryState: document.querySelector("#workflow-history-state"),
 };
 
 const MAX_OPENAPI_FILE_BYTES = 1048576;
@@ -162,6 +173,115 @@ let aiIsLoading = false;
 let aiRequestSequence = 0;
 let aiAbortController = null;
 let reviewCandidates = [];
+let reviewedCandidatesLoaded = false;
+let runHasCompleted = false;
+let historyItemCount = 0;
+
+function setWorkflowStepState(step, state, label) {
+  const link = document.querySelector(`[data-workflow-step="${step}"]`);
+  const stateElement =
+    elements[
+      `workflow${step.charAt(0).toUpperCase()}${step.slice(1)}State`
+    ];
+  if (link) {
+    link.classList.toggle("is-complete", state === "complete");
+    link.classList.toggle("is-current", state === "current");
+  }
+  if (stateElement) {
+    stateElement.textContent = label;
+  }
+}
+
+function updateWorkflowGuidance() {
+  const hasSource = elements.openApiEditor.value.trim().length > 0;
+  const hasCandidates = reviewCandidates.length > 0;
+
+  let currentStep = "source";
+  let title = "下一步：准备接口文档";
+  let copy = "加载演示文档，或选择开发提供的 OpenAPI 3.0/3.1 JSON。";
+  let action = "前往导入";
+  let href = "#openapi-generator";
+
+  if (runHasCompleted) {
+    currentStep = "history";
+    title = "本次运行已完成";
+    copy = "查看失败原因和单用例明细，也可以在历史记录中下载 HTML 报告。";
+    action = "查看报告";
+    href = "#recent-runs";
+  } else if (reviewedCandidatesLoaded) {
+    currentStep = "execution";
+    title = "下一步：确认地址并运行";
+    copy = "候选用例已载入运行配置。确认被测地址后，手动启动测试。";
+    action = "前往运行";
+    href = "#test-execution";
+  } else if (hasCandidates) {
+    currentStep = "review";
+    title = "下一步：审核候选用例";
+    copy = "展开需要修改的候选项，取消无价值用例，再载入运行配置。";
+    action = "开始审核";
+    href = "#candidate-review";
+  } else if (hasSource) {
+    currentStep = "generation";
+    title = "下一步：生成基础用例";
+    copy = "确定性生成无需大模型；AI 仅用于补充边界、异常和鲁棒性候选。";
+    action = "前往生成";
+    href = "#openapi-generator";
+  }
+
+  setWorkflowStepState(
+    "source",
+    currentStep === "source" ? "current" : hasSource ? "complete" : "pending",
+    hasSource ? "已载入" : "待开始",
+  );
+  setWorkflowStepState(
+    "generation",
+    currentStep === "generation"
+      ? "current"
+      : hasCandidates || reviewedCandidatesLoaded || runHasCompleted
+        ? "complete"
+        : "pending",
+    hasCandidates || reviewedCandidatesLoaded || runHasCompleted
+      ? "已生成"
+      : "待生成",
+  );
+  setWorkflowStepState(
+    "review",
+    currentStep === "review"
+      ? "current"
+      : reviewedCandidatesLoaded || runHasCompleted
+        ? "complete"
+        : "pending",
+    reviewedCandidatesLoaded || runHasCompleted
+      ? "已载入"
+      : hasCandidates
+        ? "待审核"
+        : "未生成",
+  );
+  setWorkflowStepState(
+    "execution",
+    currentStep === "execution"
+      ? "current"
+      : runHasCompleted
+        ? "complete"
+        : "pending",
+    runHasCompleted
+      ? "已完成"
+      : reviewedCandidatesLoaded
+        ? "待运行"
+        : "未就绪",
+  );
+  setWorkflowStepState(
+    "history",
+    currentStep === "history" ? "current" : "pending",
+    historyItemCount > 0 ? `${historyItemCount} 条记录` : "暂无记录",
+  );
+
+  elements.workflowGuidance.dataset.step = currentStep;
+  elements.guidanceTitle.textContent = title;
+  elements.guidanceCopy.textContent = copy;
+  elements.guidanceAction.textContent = action;
+  elements.guidanceAction.href = href;
+}
 
 function createOpenApiDemo() {
   return {
@@ -292,6 +412,8 @@ function registerReviewSource(source, run, insights) {
     };
   });
   reviewCandidates = [...retained, ...additions];
+  reviewedCandidatesLoaded = false;
+  runHasCompleted = false;
   renderCandidateReview();
   setReviewStatus(
     `已更新${candidateSourceLabel(source)}：${additions.length} 条，` +
@@ -316,36 +438,53 @@ function updateCandidateValue(candidate, field, value) {
 }
 
 function renderCandidateCard(candidate, index) {
-  const fieldset = makeElement("fieldset", "candidate-card");
+  const card = makeElement("details", "candidate-card");
   if (candidate.error) {
-    fieldset.classList.add("has-error");
+    card.classList.add("has-error");
+    card.open = true;
   }
-  const legend = makeElement(
-    "legend",
-    "candidate-legend",
-    `${index + 1}. ${candidate.caseId}`,
-  );
-  const heading = makeElement("div", "candidate-heading");
-  const selectLabel = makeElement("label", "candidate-select");
+  const summary = makeElement("summary", "candidate-summary");
   const checkbox = makeElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = candidate.selected;
   checkbox.setAttribute("aria-label", `选择候选 ${candidate.caseId}`);
+  checkbox.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
   checkbox.addEventListener("change", () => {
     candidate.selected = checkbox.checked;
     updateReviewCount();
   });
-  selectLabel.append(
-    checkbox,
-    makeElement("span", "", candidate.name || candidate.caseId),
+  const summaryMain = makeElement("span", "candidate-summary-main");
+  const summaryName = makeElement(
+    "strong",
+    "",
+    candidate.name || candidate.caseId,
   );
+  const route = makeElement("span", "candidate-route");
+  const routeMethod = makeElement("b", "", candidate.method);
+  const routePath = makeElement("code", "", candidate.path);
+  route.append(routeMethod, routePath);
+  summaryMain.append(summaryName, route);
   const sourceBadge = makeElement(
     "span",
     `candidate-source${candidate.source === "ai" ? " source-ai" : ""}`,
     candidateSourceLabel(candidate.source),
   );
-  heading.append(selectLabel, sourceBadge);
-  fieldset.append(legend, heading);
+  const verdict = makeElement(
+    "span",
+    "candidate-verdict",
+    `预期 ${candidate.expectedStatus}`,
+  );
+  summary.append(checkbox, summaryMain, sourceBadge, verdict);
+
+  const fieldset = makeElement("fieldset", "candidate-editor");
+  const legend = makeElement(
+    "legend",
+    "sr-only",
+    `编辑第 ${index + 1} 条候选：${candidate.caseId}`,
+  );
+  fieldset.append(legend);
 
   if (candidate.rationale) {
     const categoryNames = {
@@ -369,6 +508,7 @@ function renderCandidateCard(candidate, index) {
   nameInput.value = candidate.name;
   nameInput.addEventListener("input", () => {
     updateCandidateValue(candidate, "name", nameInput.value);
+    summaryName.textContent = nameInput.value || candidate.caseId;
   });
 
   const methodSelect = makeElement("select");
@@ -380,6 +520,7 @@ function renderCandidateCard(candidate, index) {
   });
   methodSelect.addEventListener("change", () => {
     updateCandidateValue(candidate, "method", methodSelect.value);
+    routeMethod.textContent = methodSelect.value;
   });
 
   const pathInput = makeElement("input");
@@ -388,6 +529,7 @@ function renderCandidateCard(candidate, index) {
   pathInput.spellcheck = false;
   pathInput.addEventListener("input", () => {
     updateCandidateValue(candidate, "path", pathInput.value);
+    routePath.textContent = pathInput.value;
   });
 
   const statusInput = makeElement("input");
@@ -398,6 +540,7 @@ function renderCandidateCard(candidate, index) {
   statusInput.value = candidate.expectedStatus;
   statusInput.addEventListener("input", () => {
     updateCandidateValue(candidate, "expectedStatus", statusInput.value);
+    verdict.textContent = `预期 ${statusInput.value || "—"}`;
   });
 
   const queryEditor = makeElement("textarea");
@@ -429,7 +572,8 @@ function renderCandidateCard(candidate, index) {
   if (candidate.error) {
     fieldset.append(makeElement("p", "candidate-error", candidate.error));
   }
-  return fieldset;
+  card.append(summary, fieldset);
+  return card;
 }
 
 function updateReviewCount() {
@@ -464,6 +608,7 @@ function renderCandidateReview() {
   }
   updateReviewCount();
   syncMutatingControlState();
+  updateWorkflowGuidance();
 }
 
 function parseCandidateJson(source, label, candidate) {
@@ -639,6 +784,9 @@ function applyReviewedCandidates(mode) {
   syncEditor();
   renderCaseOverview();
   resetResults();
+  reviewedCandidatesLoaded = true;
+  runHasCompleted = false;
+  updateWorkflowGuidance();
   elements.advancedPanel.open = true;
   setReviewStatus(
     mode === "append"
@@ -725,6 +873,7 @@ function invalidateGeneratedOpenApi(message) {
   if (message) {
     setOpenApiStatus(message, "idle");
   }
+  updateWorkflowGuidance();
 }
 
 function syncMutatingControlState() {
@@ -772,6 +921,9 @@ function loadOpenApiDemo() {
   elements.openApiFile.value = "";
   invalidateGeneratedOpenApi("已加载同源合成演示，尚未生成或运行。");
   invalidateGeneratedAi("OpenAPI 输入已变化，请重新生成 AI 候选。");
+  reviewedCandidatesLoaded = false;
+  runHasCompleted = false;
+  updateWorkflowGuidance();
 }
 
 async function handleOpenApiFile(event) {
@@ -806,7 +958,11 @@ async function handleOpenApiFile(event) {
     }
     elements.openApiEditor.value = JSON.stringify(parsed, null, 2);
     setOpenApiStatus("JSON 文件已载入内存，尚未生成或运行。", "success");
+    reviewedCandidatesLoaded = false;
+    runHasCompleted = false;
+    updateWorkflowGuidance();
   } catch (error) {
+    elements.openApiSourceDetails.open = true;
     setOpenApiStatus(
       error instanceof SyntaxError
         ? `JSON 文件格式有误：${error.message}`
@@ -975,6 +1131,7 @@ async function generateOpenApiCases() {
   } catch (error) {
     invalidateGeneratedOpenApi();
     setOpenApiStatus(error.message, "error");
+    elements.openApiSourceDetails.open = true;
     elements.openApiEditor.focus();
     return;
   }
@@ -1073,6 +1230,7 @@ function invalidateGeneratedAi(message) {
   if (message) {
     setAiStatus(message, "idle");
   }
+  updateWorkflowGuidance();
 }
 
 function setAiLoading(isLoading) {
@@ -1387,15 +1545,19 @@ function restoreDemo() {
   syncEditor();
   renderCaseOverview();
   resetResults();
+  reviewedCandidatesLoaded = true;
+  updateWorkflowGuidance();
   setRunStatus("已恢复安全的两步本地演示。", "idle");
 }
 
 function resetResults() {
+  runHasCompleted = false;
   elements.emptyResult.hidden = false;
   elements.resultContent.hidden = true;
   elements.overallStatus.className = "result-badge result-idle";
   elements.overallStatus.textContent = "等待运行";
   replaceChildren(elements.caseResults, []);
+  updateWorkflowGuidance();
 }
 
 function setRunStatus(message, type) {
@@ -1626,6 +1788,8 @@ function renderResult(result) {
         result.skipped_count ?? 0
       } 条跳过。`;
   setRunStatus(message, overallPassed ? "success" : "error");
+  runHasCompleted = true;
+  updateWorkflowGuidance();
 }
 
 async function runTests() {
@@ -1769,6 +1933,7 @@ function renderHistoryItem(item) {
 
 function renderHistoryList(data) {
   const items = Array.isArray(data && data.items) ? data.items : [];
+  historyItemCount = items.length;
   if (items.length === 0) {
     replaceChildren(elements.historyList, [
       makeElement(
@@ -1778,12 +1943,14 @@ function renderHistoryList(data) {
       ),
     ]);
     setHistoryStatus("历史记录为空。", "idle");
+    updateWorkflowGuidance();
     return;
   }
 
   replaceChildren(elements.historyList, items.map(renderHistoryItem));
   const total = Number.isFinite(Number(data.total)) ? Number(data.total) : items.length;
   setHistoryStatus(`已显示最近 ${items.length} 条，共保存 ${total} 条。`, "idle");
+  updateWorkflowGuidance();
 }
 
 async function loadHistory() {
@@ -1868,6 +2035,8 @@ async function loadHistoryDetail(runId, button) {
 elements.baseUrl.addEventListener("change", () => {
   payload.base_url = elements.baseUrl.value.trim();
   syncEditor();
+  runHasCompleted = false;
+  updateWorkflowGuidance();
 });
 
 elements.jsonEditor.addEventListener("change", () => {
@@ -1879,6 +2048,9 @@ elements.jsonEditor.addEventListener("change", () => {
         elements.baseUrl.value = parsed.base_url;
       }
       renderCaseOverview();
+      runHasCompleted = false;
+      reviewedCandidatesLoaded = true;
+      updateWorkflowGuidance();
       setRunStatus("高级 JSON 已更新，尚未运行。", "idle");
     }
   } catch (_error) {
@@ -1893,6 +2065,13 @@ elements.openApiFile.addEventListener("change", (event) => {
   void handleOpenApiFile(event);
 });
 elements.loadOpenApiDemo.addEventListener("click", loadOpenApiDemo);
+elements.heroLoadDemo.addEventListener("click", () => {
+  loadOpenApiDemo();
+  document.querySelector("#openapi-generator").scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+});
 elements.generateOpenApi.addEventListener("click", () => {
   void generateOpenApiCases();
 });
@@ -1937,6 +2116,8 @@ function handleOpenApiInputChange() {
   elements.openApiMaxCases,
 ].forEach((control) => {
   control.addEventListener("input", () => {
+    reviewedCandidatesLoaded = false;
+    runHasCompleted = false;
     handleOpenApiInputChange();
     invalidateGeneratedOpenApi("OpenAPI 输入已变化，请重新生成。");
     if (aiAbortController) {
@@ -1951,6 +2132,8 @@ function handleOpenApiInputChange() {
 
 [elements.aiObjective, elements.aiMaxCases].forEach((control) => {
   control.addEventListener("input", () => {
+    reviewedCandidatesLoaded = false;
+    runHasCompleted = false;
     if (aiAbortController) {
       aiAbortController.abort();
       aiAbortController = null;

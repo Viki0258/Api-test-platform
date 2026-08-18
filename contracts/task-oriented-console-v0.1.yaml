@@ -1,0 +1,85 @@
+contract: task-oriented-console
+version: "0.1"
+status: frozen
+
+workflow:
+  steps:
+    - id: openapi-generator
+      number: 1
+      label: 导入接口文档
+      completion: valid OpenAPI generation result exists
+    - id: ai-assistant
+      number: 2
+      label: 生成测试方案
+      completion: OpenAPI or AI candidates exist
+    - id: candidate-review
+      number: 3
+      label: 审核候选用例
+      completion: reviewed candidates loaded into editor
+    - id: test-execution
+      number: 4
+      label: 执行并查看结果
+      completion: a test run result is rendered
+    - id: recent-runs
+      number: 5
+      label: 历史与报告
+      completion: history list is available
+  navigation:
+    type: ordered anchor navigation
+    keyboard_accessible: true
+  guidance:
+    shows_next_action: true
+    aria_live: polite
+
+information_architecture:
+  hero:
+    compact: true
+    contains:
+      - value proposition
+      - deterministic verdict boundary
+      - AI provider state
+  source:
+    openapi_json_editor: collapsible
+    file_and_demo_actions: always visible
+  generation:
+    deterministic_and_ai_relationship: explicit
+    automatic_execution: false
+  review:
+    candidate_default: collapsed summary
+    editable_details: expanded on demand
+    selection_visible_when_collapsed: true
+  execution:
+    desktop: configuration and result side by side
+    mobile: single column
+  history:
+    visually_secondary: true
+
+compatibility:
+  stable_ids:
+    - openapi-generator
+    - ai-assistant
+    - candidate-review
+    - base-url
+    - json-editor
+    - run-tests
+    - results-title
+    - recent-runs
+  backend_endpoints: unchanged
+  browser_storage: none
+  production_dependencies: none
+
+security:
+  dynamic_content_rendering: textContent and createElement only
+  generation_executes_tests: false
+  review_executes_tests: false
+  run_requires_explicit_button: true
+  api_key_input_in_browser: forbidden
+
+responsive:
+  desktop_minimum_width: 881
+  mobile_breakpoint: 600
+  requirements:
+    - no horizontal overflow
+    - controls remain reachable
+    - workflow navigation scrolls horizontally when needed
+    - candidate editor becomes one column
