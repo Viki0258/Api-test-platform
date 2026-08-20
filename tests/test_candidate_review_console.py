@@ -236,6 +236,55 @@ def test_candidate_evaluation_failure_does_not_clear_registered_candidates() -> 
     assert "setCandidateEvaluationStatus(" in evaluator
     assert "removeReviewSource" not in evaluator
 
+    evaluator_definition = (
+        "async function evaluateCandidates(source, { manual = false } = {}) {"
+        + evaluator
+    )
+    program = (
+        '"use strict";\n'
+        + evaluator_definition
+        + "\n"
+        + "let reviewCandidates = [{caseId: 'candidate_1'}];\n"
+        + "const statuses = [];\n"
+        + "const loadingStates = [];\n"
+        + "let removeReviewSourceCalled = false;\n"
+        + "let runIsLoading = false;\n"
+        + "let openApiIsLoading = false;\n"
+        + "let candidateEvaluationIsLoading = false;\n"
+        + "let candidateEvaluationAbortController = null;\n"
+        + "let candidateEvaluationRequestSequence = 0;\n"
+        + "let candidateEvaluationResult = null;\n"
+        + "const elements = {aiObjective: {value: ''}, openApiEditor: {}};\n"
+        + "class AbortController { constructor() { this.signal = {}; } abort() {} }\n"
+        + "function evaluationCaseIds(run) { return new Set(run.cases.map((testCase) => testCase.id)); }\n"
+        + "function readCurrentOpenApiDocument() { return {openapi: '3.0.0', info: {title: 'synthetic'}, paths: {}}; }\n"
+        + "function setCandidateEvaluationStatus(message, status) { statuses.push({message, status}); }\n"
+        + "function setCandidateEvaluationLoading(value) { loadingStates.push(value); }\n"
+        + "function describeApiError() { return 'synthetic provider unavailable'; }\n"
+        + "function openAiFeedback() {}\n"
+        + "function removeReviewSource() { removeReviewSourceCalled = true; }\n"
+        + "globalThis.fetch = async () => ({ok: false, status: 502, json: async () => ({detail: 'synthetic provider unavailable'})});\n"
+        + "const generatedSource = {run: {cases: [{id: 'generated_case'}]}, insights: []};\n"
+        + "(async () => {\n"
+        + "  await evaluateCandidates(generatedSource, {manual: false});\n"
+        + "  process.stdout.write(JSON.stringify({candidateCount: reviewCandidates.length, statuses, removed: removeReviewSourceCalled}));\n"
+        + "})();\n"
+    )
+    completed = subprocess.run(
+        ["node", "-"],
+        input=program,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+        cwd=repository_root,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["candidateCount"] == 1
+    assert result["removed"] is False
+    assert any(status["status"] == "error" for status in result["statuses"])
+
 
 def test_draft_input_handlers_only_mark_feedback_stale_without_fetching() -> None:
     javascript = javascript_source()
@@ -245,10 +294,14 @@ def test_draft_input_handlers_only_mark_feedback_stale_without_fetching() -> Non
     assert "validateAiEvaluationResponse(" in draft
     assert "/api/v1/runs" not in draft
     assert "runTests(" not in draft
-    assert re.search(
-        r"elements\.(?:jsonEditor|baseUrl)\.addEventListener\(\s*[\"']input[\"']",
-        javascript,
-    )
-    input_bindings = javascript[javascript.index("elements.jsonEditor.addEventListener"):]
-    assert "markDraftEvaluationStale(" in input_bindings
-    assert "fetch(" not in input_bindings.split("restoreDemo();", 1)[0]
+    for element_name in ("baseUrl", "jsonEditor"):
+        match = re.search(
+            rf"(?ms)^elements\.{element_name}\.addEventListener\(\s*[\"']input[\"'].*?"
+            r"(?=^elements\.\w+\.addEventListener|\Z)",
+            javascript,
+        )
+        assert match is not None, element_name
+        input_handler = match.group(0)
+        assert "markDraftEvaluationStale(" in input_handler
+        assert "fetch(" not in input_handler
+        assert "evaluateCurrentDraft(" not in input_handler
