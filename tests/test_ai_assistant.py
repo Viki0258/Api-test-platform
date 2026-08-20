@@ -38,7 +38,10 @@ from app.services.ai_assistant import (
     _response_statuses,
     _safe_sample,
     _safe_schema,
+    _safe_evaluation_cases,
     _safe_text,
+    _safe_value_shape,
+    _validate_evaluation_insights,
     _validate_candidates,
     build_safe_outline,
 )
@@ -603,6 +606,141 @@ def test_sanitizer_and_provider_helpers_cover_defensive_shapes() -> None:
         }
     ) == {"required": "sample"}
     assert _preferred_success_status(["default", "404"]) == 200
+
+
+def test_evaluation_input_filters_sensitive_fields_and_shapes_values() -> None:
+    run = generated_candidate_run()
+    case = run.cases[0]
+    case.query = {
+        "safe": {"nested": [None, True, 1, 1.5, "text"], "token": "secret"},
+        "token": "secret",
+    }
+    case.depends_on = ["prior_case", "token"]
+    case.extract = [
+        ExtractionRule(name="secret_value", path="$.secret", secret=True),
+        ExtractionRule(name="safe_value", path="$.safe"),
+        ExtractionRule(name="token", path="$.token"),
+        ExtractionRule(name="path_value", path="Bearer path-secret"),
+    ]
+    case.assertions[0].path = "$.id"
+    case.json_body = {"safe": [None, True, 1, 1.5, "text"], "token": "secret"}
+
+    safe_cases = _safe_evaluation_cases(run, AiEvaluationRole.DRAFT_EVALUATOR)
+
+    assert safe_cases[0]["query"][0]["name"] == "safe"
+    assert safe_cases[0]["extract"] == [{"name": "safe_value", "path": "$.safe"}]
+    assert safe_cases[0]["depends_on"] == ["prior_case"]
+    assert safe_cases[0]["assertions"][0]["path"] == "$.id"
+    assert safe_cases[0]["json_body_shape"] == {
+        "type": "object",
+        "properties": {"safe": {"type": "array", "items": [
+            {"type": "null"},
+            {"type": "boolean"},
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "string"},
+        ]}},
+    }
+    assert _safe_value_shape({"nested": {"value": 1}}, depth=5) == {
+        "type": "truncated"
+    }
+    assert _safe_value_shape(object(), depth=0) == {"type": "unknown"}
+    assert _response_statuses({"default": {}, "bad": {}, 200: {}, None: {}}) == [
+        "default",
+        "200",
+    ]
+    assert _safe_schema(
+        {
+            "type": "string",
+            "minimum": 1,
+            "pattern": "safe",
+            "properties": {"safe": {"type": "integer"}, "token": {"type": "string"}},
+        },
+        depth=0,
+    ) == {
+        "type": "string",
+        "minimum": 1,
+        "pattern": "safe",
+        "properties": {"safe": {"type": "integer"}},
+    }
+
+
+def test_evaluation_contract_rejects_invalid_provider_shapes() -> None:
+    with pytest.raises(AiAssistantError):
+        MockAiProvider().evaluate(
+            role=AiEvaluationRole.CANDIDATE_EVALUATOR,
+            evaluation_input={"cases": {}},
+            objective="",
+        )
+    draft_evaluation = MockAiProvider().evaluate(
+        role=AiEvaluationRole.DRAFT_EVALUATOR,
+        evaluation_input={"cases": [{}]},
+        objective="",
+    )
+    assert len(draft_evaluation.issues) == 1
+
+    with pytest.raises(AiAssistantError):
+        _validate_evaluation_insights(
+            [
+                AiCaseInsight(
+                    case_id="candidate_1",
+                    category="boundary",
+                    rationale="synthetic",
+                )
+                for _ in range(11)
+            ],
+            {"candidate_1"},
+        )
+
+    service = AiAssistantService(Settings())
+    with pytest.raises(AiAssistantError):
+        service._evaluate(
+            role=AiEvaluationRole.DRAFT_EVALUATOR,
+            run=generated_candidate_run(),
+            document=None,
+            insights=None,
+            objective="",
+            max_cases=0,
+        )
+
+    class NoEvaluator:
+        name = "synthetic"
+        model = None
+        evaluate = None
+
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=NoEvaluator()).evaluate_draft(
+            AiDraftEvaluationRequest(draft=generated_candidate_run())
+        )
+
+    class StaticEvaluator:
+        def __init__(self, *, name="synthetic", model=None):
+            self.name = name
+            self.model = model
+
+        def evaluate(self, *, role, **_kwargs):
+            return {
+                "role": role,
+                "provider": self.name,
+                "model": self.model,
+                "score": 50,
+                "summary": "Synthetic evaluation",
+                "strengths": [],
+                "issues": [],
+                "recommendations": [],
+                "evaluated_case_count": 1,
+                "requires_human_review": True,
+            }
+
+    draft_request = AiDraftEvaluationRequest(draft=generated_candidate_run())
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=StaticEvaluator(name="")).evaluate_draft(
+            draft_request
+        )
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=StaticEvaluator(model=123)).evaluate_draft(
+            draft_request
+        )
 
 
 def generated_candidate_run(*, count: int = 1) -> TestRunRequest:
