@@ -13,7 +13,7 @@
 - 支持从前序 JSON 响应提取变量，并在后续路径、请求和断言中复用
 - 支持显式 `depends_on` 依赖；前序失败时跳过依赖用例，独立用例继续执行
 - 支持从 OpenAPI 3.0/3.1 JSON 对象确定性生成基础正向测试用例草稿
-- 提供可拔插 AI 测试助手：默认 Mock 本地演示，可切换 OpenAI 生成边界、异常和健壮性候选用例
+- 提供可拔插 AI 测试助手：默认 Mock 本地演示，可切换 OpenAI 生成边界、异常和健壮性候选用例，并支持候选用例与测试草稿的只读 AI 评测反馈
 - AI 输入先移除示例值、默认值、认证信息和敏感字段，输出经严格校验并必须人工确认
 - 缺失变量、提取失败和网络异常返回结构化错误
 - 结果只报告成功提取的变量名，不返回变量值或完整请求头
@@ -131,6 +131,26 @@ Header/Cookie 参数及疑似密钥字段。模型输出仍是不可信输入：
 
 `GET /api/v1/ai/status` 可查看当前 Provider 是否就绪；`POST /api/v1/ai/cases/generate` 只生成候选，
 不会执行、写入运行历史或保存 OpenAPI 文档。OpenAI 调用可能产生费用，Mock 模式则完全不联网。
+
+### 多角色 AI 评测与反馈
+
+平台将 AI 生成与 AI 评测拆分为两个逻辑角色，但复用同一组 Provider 和模型配置，不需要接入三个不同模型或三个外部服务：
+
+- `candidate_evaluator`：评测 AI 生成的候选用例，返回整体评分、摘要、优点、问题、建议及对应候选 ID。
+- `draft_evaluator`：评测当前测试草稿，返回整体反馈，并可关联具体用例 ID 或报告全局问题。
+
+在页面中，生成候选成功后会自动触发一次只读评测；也可以点击“重新评测候选”。候选加入测试编辑器后，
+人工完成新增或修改时，可以点击“评测当前草稿”。独立的“AI 评测反馈”窗口支持在候选反馈和草稿反馈之间切换。
+候选、草稿或关联 OpenAPI 文档发生变化后，已有反馈会标记为过期，必须重新评测才能得到与当前内容对应的结果。
+
+对应 API 为：
+
+- `POST /api/v1/ai/cases/evaluate`：评测候选用例。
+- `POST /api/v1/ai/drafts/evaluate`：评测当前测试草稿。
+
+评测输入使用脱敏后的结构化摘要，不包含 `base_url`、请求头值、请求体敏感值、运行变量值或 API Key。评测只提供质量建议，
+不会自动修改候选或草稿、不会执行被测接口，也不参与最终通过/失败判定；运行测试仍需人工单独点击。候选生成成功但评测失败时，
+候选仍可继续人工审核。当前评测反馈只保存在页面内存中，刷新页面后丢失，也不会写入运行历史数据库。
 
 ### 运行历史 API
 
@@ -321,7 +341,7 @@ CI 会在面向 `main` 的 Pull Request、推送到 `main` 以及手动触发时
 3. 历史筛选、Allure 适配和报告模板扩展
 4. OpenAPI 用例生成的边界场景扩展与人工确认流程
 5. GitHub Actions、Docker Compose 和独立演示被测服务
-6. AI 失败日志总结、更多 Provider 适配器与生成质量评估
+6. AI 失败日志总结与更多 Provider 适配器
 ## Asynchronous run queue (multiple clients and Workers)
 
 The existing synchronous `POST /api/v1/runs` remains compatible. For long-running
