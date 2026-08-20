@@ -1,0 +1,216 @@
+contract: ai-multi-role-evaluation
+version: "0.1"
+status: frozen
+
+principles:
+  provider_model:
+    behavior: reuse_current_ai_provider_and_model
+    role_prompts_are_separate: true
+    role_models_are_not_separate_in_v0_1: true
+  human_control:
+    evaluation_is_advisory: true
+    evaluation_can_modify_cases: false
+    evaluation_can_execute_tests: false
+    final_acceptance_is_human: true
+  persistence:
+    feedback_scope: page_memory_only
+    database_changes: false
+
+roles:
+  generator:
+    existing: true
+    endpoint: /api/v1/ai/cases/generate
+    behavior: generate_candidate_cases
+  candidate_evaluator:
+    existing: false
+    automatic_trigger: after_successful_candidate_generation
+    manual_trigger: re_evaluate_candidates_button
+    endpoint: /api/v1/ai/cases/evaluate
+  draft_evaluator:
+    existing: false
+    automatic_trigger: none
+    manual_trigger: evaluate_current_draft_button
+    endpoint: /api/v1/ai/drafts/evaluate
+
+endpoints:
+  evaluate_candidates:
+    method: POST
+    path: /api/v1/ai/cases/evaluate
+    tags: [ai-assistant, ai-evaluation]
+    request:
+      document:
+        type: object
+        required: true
+        constraints:
+          openapi_versions: ["3.0.x", "3.1.x"]
+          max_serialized_bytes: 1048576
+      candidate_run:
+        type: TestRunRequest
+        required: true
+        constraints:
+          maximum_cases: 10
+      insights:
+        type: array
+        required: true
+        item:
+          case_id: string
+          category: boundary_or_negative_or_robustness
+          rationale: string
+      objective:
+        type: string
+        required: false
+        maximum_length: 500
+    response:
+      role:
+        constant: candidate_evaluator
+      provider: mock_or_openai
+      model: string_or_null
+      score: integer
+      summary: string
+      strengths:
+        type: array
+        maximum_items: 10
+        item: string
+      issues:
+        type: array
+        maximum_items: 50
+        item:
+          case_id: string_or_null
+          severity: info_or_warning_or_error
+          title: string
+          detail: string
+          suggestion: string
+      recommendations:
+        type: array
+        maximum_items: 10
+        item: string
+      evaluated_case_count: integer
+      requires_human_review:
+        type: boolean
+        constant: true
+
+  evaluate_draft:
+    method: POST
+    path: /api/v1/ai/drafts/evaluate
+    tags: [ai-assistant, ai-evaluation]
+    request:
+      document:
+        type: object_or_null
+        required: false
+        constraints:
+          openapi_versions: ["3.0.x", "3.1.x"]
+          max_serialized_bytes: 1048576
+      draft:
+        type: TestRunRequest
+        required: true
+        constraints:
+          maximum_cases: 50
+      objective:
+        type: string
+        required: false
+        maximum_length: 500
+    response:
+      role:
+        constant: draft_evaluator
+      provider: mock_or_openai
+      model: string_or_null
+      score: integer
+      summary: string
+      strengths:
+        type: array
+        maximum_items: 10
+        item: string
+      issues:
+        type: array
+        maximum_items: 50
+        item:
+          case_id: string_or_null
+          severity: info_or_warning_or_error
+          title: string
+          detail: string
+          suggestion: string
+      recommendations:
+        type: array
+        maximum_items: 10
+        item: string
+      evaluated_case_count: integer
+      requires_human_review:
+        type: boolean
+        constant: true
+
+provider_input:
+  common_stripped:
+    - base_url
+    - server_urls
+    - request header names and values
+    - request header values
+    - cookies
+    - variable values
+    - secret variable names and values
+    - request body example values
+    - authentication data
+    - API keys and credentials
+  candidate_evaluator_allowed:
+    - safe OpenAPI structure
+    - candidate case IDs, names, methods and relative paths
+    - query parameter names and structural values only
+    - assertion types, paths and expected status codes
+    - dependency and extraction metadata
+    - existing candidate category and rationale
+  draft_evaluator_allowed:
+    - safe OpenAPI structure when available
+    - draft case IDs, names, methods and relative paths
+    - query and body structural shapes without values
+    - assertion types, paths and expected value types
+    - dependency and extraction names and paths
+  limits:
+    maximum_prompt_bytes: 65536
+    maximum_issues: 50
+    maximum_strengths: 10
+    maximum_recommendations: 10
+
+provider_output:
+  structured_json: required
+  score_range: 0_to_100
+  issue_severity: [info, warning, error]
+  issue_text_max_length: 500
+  forbidden:
+    - candidate replacement payload
+    - automatic execution command
+    - credentials
+    - absolute request URLs
+    - raw response secrets
+    - persistence of source document or prompt
+
+ui:
+  feedback_window:
+    type: in_page_dialog
+    scopes: [candidate_evaluation, draft_evaluation]
+    latest_result_only: true
+    mobile_behavior: full_screen
+  candidate_evaluation:
+    show_re_evaluate_control: true
+    evaluation_failure_keeps_candidates: true
+  draft_evaluation:
+    show_action_button: true
+    mark_feedback_stale_after_draft_change: true
+    no_evaluation_on_each_keystroke: true
+  execution:
+    evaluation_does_not_enable_or_trigger_run: true
+
+errors:
+  provider_not_configured:
+    status: 503
+    code: AI_PROVIDER_NOT_CONFIGURED
+  provider_unavailable:
+    status: 502
+    code: AI_PROVIDER_UNAVAILABLE
+  invalid_provider_output:
+    status: 502
+    code: AI_PROVIDER_INVALID_OUTPUT
+  invalid_evaluation_input:
+    status: 422
+    code: INVALID_AI_EVALUATION_INPUT
+  evaluation_source_too_large:
+    status: 422
+    code: AI_EVALUATION_SOURCE_TOO_LARGE
