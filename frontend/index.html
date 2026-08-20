@@ -10,7 +10,7 @@
     <title>接口测试控制台</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
-  <body>
+  <body class="compact-console">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
 
     <header class="site-header">
@@ -29,16 +29,15 @@
     <main id="main-content" class="shell">
       <section class="hero" aria-labelledby="page-title">
         <div class="hero-main">
-          <p class="eyebrow">接口文档 → 测试方案 → 自动执行</p>
-          <h1 id="page-title">从接口文档到测试报告，一条流程完成</h1>
+          <p class="eyebrow">导入 → 生成 → 审核 → 运行</p>
+          <h1 id="page-title">接口测试，从文档到报告</h1>
           <p class="hero-copy">
-            导入 OpenAPI 文档，生成基础用例和 AI 候选，人工审核后执行。
-            最终通过或失败始终由确定性断言判断，不交给模型决定。
+            导入 OpenAPI，生成并审核用例，确认后运行。结果由确定性断言判定。
           </p>
           <div class="hero-actions">
-            <a class="button button-primary" href="#openapi-generator">开始导入接口文档</a>
+            <a class="button button-primary" href="#openapi-generator">导入接口文档</a>
             <button id="hero-load-demo" class="button button-secondary" type="button">
-              直接体验合成演示
+              加载演示
             </button>
           </div>
         </div>
@@ -104,10 +103,9 @@
         <div class="panel-heading">
           <div>
             <p class="step-label">步骤 1 · 导入接口文档</p>
-            <h2 id="openapi-title">先让平台读懂有哪些接口</h2>
+            <h2 id="openapi-title">导入接口文档</h2>
             <p class="openapi-intro">
-              这里选择的 JSON 就是接口文档，但必须符合 OpenAPI 3.0/3.1。
-              平台先生成可检查的正向用例草稿，不访问被测地址，也不自动运行。
+              选择 OpenAPI 3.0/3.1 JSON，生成可审核草稿；不会访问被测服务。
             </p>
           </div>
           <button
@@ -250,10 +248,9 @@
         <div class="panel-heading">
           <div>
             <p class="step-label">步骤 2 · 生成测试方案</p>
-            <h2 id="ai-title">基础规则打底，AI补充异常思路</h2>
+            <h2 id="ai-title">补充 AI 异常候选</h2>
             <p class="openapi-intro">
-              基础生成器负责正向草稿，AI负责补充边界、异常和健壮性候选。
-              默认 Mock 只演示流程；配置真实 Provider 后才由模型分析，密钥仍只存在后端。
+              AI 只补充边界和异常候选，仍需人工审核后执行。
             </p>
           </div>
           <span id="ai-provider-badge" class="environment-badge">正在检测…</span>
@@ -295,7 +292,23 @@
               >
                 前往审核工作台
               </button>
+              <button
+                id="evaluate-ai-candidates"
+                class="button button-secondary"
+                type="button"
+                disabled
+              >
+                重新评测候选
+              </button>
             </div>
+            <button
+              id="view-ai-candidate-feedback"
+              class="button button-secondary"
+              type="button"
+              disabled
+            >
+              查看最新候选反馈
+            </button>
             <div
               id="ai-status"
               class="status-message"
@@ -305,6 +318,15 @@
             >
               候选用例不会自动执行，请生成后逐条检查。
             </div>
+            <p
+              id="candidate-evaluation-status"
+              class="status-message ai-evaluation-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              生成候选后会自动进行只读评测，不会运行测试。
+            </p>
           </div>
           <div class="openapi-output" aria-labelledby="ai-output-title">
             <h3 id="ai-output-title">候选分析</h3>
@@ -330,10 +352,9 @@
         <div class="panel-heading">
           <div>
             <p class="step-label">步骤 3 · 人工审核</p>
-            <h2 id="candidate-review-title">只保留值得执行的候选用例</h2>
+            <h2 id="candidate-review-title">审核候选用例</h2>
             <p class="openapi-intro">
-              基础草稿和 AI 候选会汇总到这里。先勾选、编辑并检查，再替换或追加到运行配置；
-              整个审核过程不会发送测试请求。
+              勾选、编辑后加入运行配置；审核过程不会发送测试请求。
             </p>
           </div>
           <span id="review-count" class="environment-badge">0 条候选</span>
@@ -381,7 +402,7 @@
           <div class="panel-heading">
             <div>
               <p class="step-label">步骤 4 · 执行测试</p>
-              <h2 id="config-title">确认目标与执行清单</h2>
+              <h2 id="config-title">确认目标并运行</h2>
             </div>
             <button id="restore-demo" class="button button-secondary" type="button">
               加载演示
@@ -433,12 +454,33 @@
           </details>
 
           <div class="action-row">
+            <button id="evaluate-draft-ai" class="button button-secondary" type="button">
+              评测当前草稿
+            </button>
+            <button
+              id="view-draft-ai-feedback"
+              class="button button-secondary"
+              type="button"
+              disabled
+            >
+              查看最新草稿反馈
+            </button>
             <button id="run-tests" class="button button-primary" type="button">
               <span class="button-label">运行测试</span>
               <span class="button-spinner" aria-hidden="true"></span>
             </button>
             <p class="privacy-note">数据仅发送到当前页面的同源接口，不在浏览器中保存。</p>
           </div>
+
+          <p
+            id="draft-evaluation-status"
+            class="status-message ai-evaluation-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            可随时评测当前草稿；评测不会修改草稿或运行测试。
+          </p>
 
           <div
             id="run-status"
@@ -455,7 +497,7 @@
           <div class="panel-heading">
             <div>
               <p class="step-label">确定性结果</p>
-              <h2 id="results-title">通过、失败与定位信息</h2>
+              <h2 id="results-title">运行结果</h2>
             </div>
             <span id="overall-status" class="result-badge result-idle">等待运行</span>
           </div>
@@ -496,8 +538,8 @@
         <div class="panel-heading">
           <div>
             <p class="step-label">步骤 5 · 历史与报告</p>
-            <h2 id="history-title">复盘最近运行</h2>
-            <p class="history-intro">保存在本机的最近 10 条安全测试结果。</p>
+            <h2 id="history-title">历史报告</h2>
+            <p class="history-intro">最近 10 条运行记录。</p>
           </div>
           <button id="refresh-history" class="button button-secondary" type="button">
             刷新记录
@@ -544,6 +586,53 @@
         <p>智能接口自动化测试与质量平台 · 本地开发控制台</p>
       </div>
     </footer>
+
+    <dialog id="ai-feedback-dialog" aria-labelledby="ai-feedback-title">
+      <div class="ai-feedback-shell">
+        <div class="ai-feedback-heading">
+          <div>
+            <p id="ai-feedback-scope" class="step-label"></p>
+            <h2 id="ai-feedback-title">AI 评测反馈</h2>
+          </div>
+          <button id="close-ai-feedback" class="button button-secondary" type="button">关闭</button>
+        </div>
+        <div class="ai-feedback-switcher" role="group" aria-label="Switch AI feedback">
+          <button
+            id="show-candidate-ai-feedback"
+            class="button button-secondary"
+            type="button"
+            disabled
+          >
+            候选反馈
+          </button>
+          <button
+            id="show-draft-ai-feedback"
+            class="button button-secondary"
+            type="button"
+            disabled
+          >
+            草稿反馈
+          </button>
+        </div>
+        <p id="ai-feedback-status" class="status-message" role="status" aria-live="polite"></p>
+        <p id="ai-feedback-stale" class="status-message status-error" role="status" aria-live="polite" hidden></p>
+        <p id="ai-feedback-time" class="field-help"></p>
+        <p id="ai-feedback-summary"></p>
+        <p id="ai-feedback-score"></p>
+        <section aria-labelledby="ai-feedback-strengths-title">
+          <h3 id="ai-feedback-strengths-title">优点</h3>
+          <ul id="ai-feedback-strengths"></ul>
+        </section>
+        <section aria-labelledby="ai-feedback-issues-title">
+          <h3 id="ai-feedback-issues-title">问题</h3>
+          <ul id="ai-feedback-issues"></ul>
+        </section>
+        <section aria-labelledby="ai-feedback-recommendations-title">
+          <h3 id="ai-feedback-recommendations-title">建议</h3>
+          <ul id="ai-feedback-recommendations"></ul>
+        </section>
+      </div>
+    </dialog>
 
     <script src="/static/app.js" defer></script>
   </body>

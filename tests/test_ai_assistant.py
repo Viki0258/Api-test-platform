@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 
 import httpx
@@ -8,13 +9,24 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app, get_ai_assistant
-from app.schemas import AiGenerateRequest
+from app.schemas import (
+    AiCandidateEvaluationRequest,
+    AiCaseInsight,
+    AiDraftEvaluationRequest,
+    AiEvaluationResponse,
+    AiEvaluationRole,
+    AiGenerateRequest,
+    ExtractionRule,
+    TestCase,
+    TestRunRequest,
+)
 from app.services.ai_assistant import (
     AiAssistantService,
     AiAssistantError,
     CandidateQueryParameter,
     MockAiProvider,
     OpenAiProvider,
+    ProviderEvaluation,
     ProviderCandidate,
     ProviderOutput,
     _boundary_value,
@@ -26,7 +38,10 @@ from app.services.ai_assistant import (
     _response_statuses,
     _safe_sample,
     _safe_schema,
+    _safe_evaluation_cases,
     _safe_text,
+    _safe_value_shape,
+    _validate_evaluation_insights,
     _validate_candidates,
     build_safe_outline,
 )
@@ -157,6 +172,24 @@ def test_openai_status_is_available_without_key_and_generation_is_blocked() -> N
     assert status.json()["network_access"] is True
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "AI_PROVIDER_NOT_CONFIGURED"
+
+
+def test_unconfigured_provider_validates_generation_source_before_provider_status() -> None:
+    service = AiAssistantService(Settings(ai_provider="openai"))
+
+    with pytest.raises(AiAssistantError) as invalid_document:
+        service.generate(
+            AiGenerateRequest(document={"openapi": "2.0", "paths": {}})
+        )
+    assert invalid_document.value.code == "INVALID_AI_SOURCE_DOCUMENT"
+    assert invalid_document.value.status_code == 422
+
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    with pytest.raises(AiAssistantError) as oversized:
+        service.generate(AiGenerateRequest(document=oversized_document))
+    assert oversized.value.code == "AI_SOURCE_DOCUMENT_TOO_LARGE"
+    assert oversized.value.status_code == 422
 
 
 def test_openai_provider_uses_structured_responses_without_storing_input() -> None:
@@ -573,3 +606,770 @@ def test_sanitizer_and_provider_helpers_cover_defensive_shapes() -> None:
         }
     ) == {"required": "sample"}
     assert _preferred_success_status(["default", "404"]) == 200
+
+
+def test_evaluation_input_filters_sensitive_fields_and_shapes_values() -> None:
+    run = generated_candidate_run()
+    case = run.cases[0]
+    case.query = {
+        "safe": {"nested": [None, True, 1, 1.5, "text"], "token": "secret"},
+        "token": "secret",
+    }
+    case.depends_on = ["prior_case", "token"]
+    case.extract = [
+        ExtractionRule(name="secret_value", path="$.secret", secret=True),
+        ExtractionRule(name="safe_value", path="$.safe"),
+        ExtractionRule(name="token", path="$.token"),
+        ExtractionRule(name="path_value", path="Bearer path-secret"),
+    ]
+    case.assertions[0].path = "$.id"
+    case.json_body = {"safe": [None, True, 1, 1.5, "text"], "token": "secret"}
+
+    safe_cases = _safe_evaluation_cases(run, AiEvaluationRole.DRAFT_EVALUATOR)
+
+    assert safe_cases[0]["query"][0]["name"] == "safe"
+    assert safe_cases[0]["extract"] == [{"name": "safe_value", "path": "$.safe"}]
+    assert safe_cases[0]["depends_on"] == ["prior_case"]
+    assert safe_cases[0]["assertions"][0]["path"] == "$.id"
+    assert safe_cases[0]["json_body_shape"] == {
+        "type": "object",
+        "properties": {"safe": {"type": "array", "items": [
+            {"type": "null"},
+            {"type": "boolean"},
+            {"type": "integer"},
+            {"type": "number"},
+            {"type": "string"},
+        ]}},
+    }
+    assert _safe_value_shape({"nested": {"value": 1}}, depth=5) == {
+        "type": "truncated"
+    }
+    assert _safe_value_shape(object(), depth=0) == {"type": "unknown"}
+    assert _response_statuses({"default": {}, "bad": {}, 200: {}, None: {}}) == [
+        "default",
+        "200",
+    ]
+    assert _safe_schema(
+        {
+            "type": "string",
+            "minimum": 1,
+            "pattern": "safe",
+            "properties": {"safe": {"type": "integer"}, "token": {"type": "string"}},
+        },
+        depth=0,
+    ) == {
+        "type": "string",
+        "minimum": 1,
+        "pattern": "safe",
+        "properties": {"safe": {"type": "integer"}},
+    }
+
+
+def test_evaluation_contract_rejects_invalid_provider_shapes() -> None:
+    with pytest.raises(AiAssistantError):
+        MockAiProvider().evaluate(
+            role=AiEvaluationRole.CANDIDATE_EVALUATOR,
+            evaluation_input={"cases": {}},
+            objective="",
+        )
+    draft_evaluation = MockAiProvider().evaluate(
+        role=AiEvaluationRole.DRAFT_EVALUATOR,
+        evaluation_input={"cases": [{}]},
+        objective="",
+    )
+    assert len(draft_evaluation.issues) == 1
+
+    with pytest.raises(AiAssistantError):
+        _validate_evaluation_insights(
+            [
+                AiCaseInsight(
+                    case_id="candidate_1",
+                    category="boundary",
+                    rationale="synthetic",
+                )
+                for _ in range(11)
+            ],
+            {"candidate_1"},
+        )
+
+    service = AiAssistantService(Settings())
+    with pytest.raises(AiAssistantError):
+        service._evaluate(
+            role=AiEvaluationRole.DRAFT_EVALUATOR,
+            run=generated_candidate_run(),
+            document=None,
+            insights=None,
+            objective="",
+            max_cases=0,
+        )
+
+    class NoEvaluator:
+        name = "synthetic"
+        model = None
+        evaluate = None
+
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=NoEvaluator()).evaluate_draft(
+            AiDraftEvaluationRequest(draft=generated_candidate_run())
+        )
+
+    class StaticEvaluator:
+        def __init__(self, *, name="synthetic", model=None):
+            self.name = name
+            self.model = model
+
+        def evaluate(self, *, role, **_kwargs):
+            return {
+                "role": role,
+                "provider": self.name,
+                "model": self.model,
+                "score": 50,
+                "summary": "Synthetic evaluation",
+                "strengths": [],
+                "issues": [],
+                "recommendations": [],
+                "evaluated_case_count": 1,
+                "requires_human_review": True,
+            }
+
+    draft_request = AiDraftEvaluationRequest(draft=generated_candidate_run())
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=StaticEvaluator(name="")).evaluate_draft(
+            draft_request
+        )
+    with pytest.raises(AiAssistantError):
+        AiAssistantService(Settings(), provider=StaticEvaluator(model=123)).evaluate_draft(
+            draft_request
+        )
+
+
+def generated_candidate_run(*, count: int = 1) -> TestRunRequest:
+    return TestRunRequest(
+        base_url="https://synthetic.example.test",
+        cases=[
+            TestCase(
+                id=f"candidate_{index}",
+                name=f"Synthetic candidate {index}",
+                method="GET",
+                path="/users/{user_id}",
+                query={"user_id": 1},
+                assertions=[{"type": "status_code", "expected": 200}],
+            )
+            for index in range(1, count + 1)
+        ],
+    )
+
+
+def test_mock_candidate_and_draft_evaluations_are_deterministic() -> None:
+    service = AiAssistantService(Settings())
+    candidate_request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(),
+        insights=[
+            AiCaseInsight(
+                case_id="candidate_1",
+                category="boundary",
+                rationale="Exercises the declared lower bound.",
+            )
+        ],
+    )
+
+    candidate = service.evaluate_candidates(candidate_request)
+    draft = service.evaluate_draft(
+        AiDraftEvaluationRequest(draft=generated_candidate_run())
+    )
+
+    assert candidate.role is AiEvaluationRole.CANDIDATE_EVALUATOR
+    assert draft.role is AiEvaluationRole.DRAFT_EVALUATOR
+    assert 0 <= candidate.score <= 100
+    assert 0 <= draft.score <= 100
+    assert candidate.evaluated_case_count == 1
+    assert draft.evaluated_case_count == 1
+    assert candidate.requires_human_review is True
+    assert draft.requires_human_review is True
+    assert candidate.model_dump() == service.evaluate_candidates(
+        candidate_request
+    ).model_dump()
+    assert draft.model_dump() == service.evaluate_draft(
+        AiDraftEvaluationRequest(draft=generated_candidate_run())
+    ).model_dump()
+
+
+def test_evaluation_response_enforces_strict_contract_bounds() -> None:
+    base = {
+        "role": "candidate_evaluator",
+        "provider": "mock",
+        "model": None,
+        "score": 50,
+        "summary": "Synthetic summary",
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "evaluated_case_count": 1,
+        "requires_human_review": True,
+    }
+
+    for invalid_score in (-1, 101):
+        with pytest.raises(ValueError):
+            AiEvaluationResponse.model_validate({**base, "score": invalid_score})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "strengths": ["x"] * 11})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {
+                **base,
+                "issues": [
+                    {
+                        "case_id": "candidate_1",
+                        "severity": "warning",
+                        "title": "x" * 201,
+                        "detail": "detail",
+                        "suggestion": "suggestion",
+                    }
+                ],
+            }
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "requires_human_review": False}
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "unexpected": "synthetic"})
+
+    issue = {
+        "case_id": "candidate_1",
+        "severity": "warning",
+        "title": "title",
+        "detail": "detail",
+        "suggestion": "suggestion",
+    }
+    for invalid_issues in ([issue] * 51,):
+        with pytest.raises(ValueError):
+            AiEvaluationResponse.model_validate({**base, "issues": invalid_issues})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "recommendations": ["x"] * 11})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "issues": [{**issue, "severity": "critical"}]}
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "issues": [{**issue, "detail": "x" * 501}]}
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "issues": [{**issue, "suggestion": "x" * 501}]}
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "issues": [{**issue, "case_id": "not valid"}]}
+        )
+
+
+def test_evaluation_rejects_unknown_case_ids_without_echoing_source() -> None:
+    request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(),
+        insights=[
+            AiCaseInsight(
+                case_id="unknown_case",
+                category="negative",
+                rationale="Synthetic unknown case.",
+            )
+        ],
+    )
+
+    with pytest.raises(AiAssistantError) as captured:
+        AiAssistantService(Settings()).evaluate_candidates(request)
+    assert captured.value.code == "INVALID_AI_EVALUATION_INPUT"
+
+
+def test_evaluation_rejects_source_over_one_mib_with_evaluation_error() -> None:
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    request = AiCandidateEvaluationRequest(
+        document=oversized_document,
+        candidate_run=generated_candidate_run(),
+        insights=[],
+    )
+
+    with pytest.raises(AiAssistantError) as captured:
+        AiAssistantService(Settings()).evaluate_candidates(request)
+    assert captured.value.code == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert captured.value.status_code == 422
+
+
+def test_evaluation_case_count_boundaries_are_enforced() -> None:
+    service = AiAssistantService(Settings())
+    candidate_request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(count=10),
+        insights=[
+            AiCaseInsight(
+                case_id=f"candidate_{index}",
+                category="boundary",
+                rationale="Synthetic rationale.",
+            )
+            for index in range(1, 11)
+        ],
+    )
+    assert (
+        service.evaluate_candidates(candidate_request).evaluated_case_count == 10
+    )
+
+    with pytest.raises(ValueError):
+        AiCandidateEvaluationRequest(
+            document=ai_document(),
+            candidate_run=generated_candidate_run(count=11),
+            insights=[],
+        )
+
+    draft = service.evaluate_draft(
+        AiDraftEvaluationRequest(draft=generated_candidate_run(count=50))
+    )
+    assert draft.evaluated_case_count == 50
+
+
+def test_evaluation_does_not_execute_persist_or_mutate_inputs(monkeypatch) -> None:
+    from app.services.executor import TestExecutor
+    from app.services.run_history import RunHistoryStore
+
+    def unexpected_execution(*_args, **_kwargs):
+        raise AssertionError("evaluation must not execute test cases")
+
+    def unexpected_persistence(*_args, **_kwargs):
+        raise AssertionError("evaluation must not persist run history")
+
+    monkeypatch.setattr(TestExecutor, "run", unexpected_execution)
+    monkeypatch.setattr(RunHistoryStore, "save", unexpected_persistence)
+    request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(),
+        insights=[],
+    )
+    before = copy.deepcopy(request.model_dump(mode="json"))
+
+    result = AiAssistantService(Settings()).evaluate_candidates(request)
+
+    assert result.requires_human_review is True
+    assert request.model_dump(mode="json") == before
+
+    draft_request = AiDraftEvaluationRequest(
+        document=ai_document(),
+        draft=generated_candidate_run(),
+    )
+    draft_before = copy.deepcopy(draft_request.model_dump(mode="json"))
+
+    draft_result = AiAssistantService(Settings()).evaluate_draft(draft_request)
+
+    assert draft_result.requires_human_review is True
+    assert draft_request.model_dump(mode="json") == draft_before
+
+
+def test_utf8_evaluation_prompt_limit_accepts_exact_boundary_and_rejects_over() -> None:
+    def response(_request: httpx.Request) -> httpx.Response:
+        result = {
+            "role": "draft_evaluator",
+            "provider": "openai",
+            "model": "synthetic-model",
+            "score": 50,
+            "summary": "Synthetic",
+            "strengths": [],
+            "issues": [],
+            "recommendations": [],
+            "evaluated_case_count": 1,
+            "requires_human_review": True,
+        }
+        return httpx.Response(
+            200,
+            json={"output_text": json.dumps(result, ensure_ascii=False)},
+        )
+
+    def evaluation_input_for_bytes(target: int) -> dict:
+        low, high = 0, target
+        while low <= high:
+            length = (low + high) // 2
+            candidate = {"padding": "x" * length}
+            prompt = json.dumps(
+                {"objective": "", "evaluation": candidate},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            size = len(prompt.encode("utf-8"))
+            if size < target:
+                low = length + 1
+            elif size > target:
+                high = length - 1
+            else:
+                return candidate
+        raise AssertionError(f"could not construct {target}-byte UTF-8 prompt")
+
+    provider = OpenAiProvider(
+        api_key="synthetic",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(response),
+    )
+    exact = evaluation_input_for_bytes(65_536)
+    assert provider.evaluate(
+        role=AiEvaluationRole.DRAFT_EVALUATOR,
+        evaluation_input=exact,
+        objective="",
+    )
+
+    over = {"padding": exact["padding"] + "x"}
+    with pytest.raises(AiAssistantError) as captured:
+        provider.evaluate(
+            role=AiEvaluationRole.DRAFT_EVALUATOR,
+            evaluation_input=over,
+            objective="",
+        )
+    assert captured.value.code == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert captured.value.status_code == 422
+
+
+def test_openai_evaluation_uses_separate_strict_role_instructions() -> None:
+    captured: list[dict] = []
+    sentinels = {
+        "base_url": "sentinel-base-url",
+        "header_name": "sentinel-header-name",
+        "header_value": "sentinel-header-value",
+        "cookie": "sentinel-cookie-value",
+        "variable": "sentinel-variable-value",
+        "secret_variable": "sentinel-secret-variable-value",
+        "body": "sentinel-body-value",
+        "example": "sentinel-example-value",
+        "default": "sentinel-default-value",
+        "auth": "sentinel-auth-value",
+        "document_secret": "sentinel-document-secret",
+    }
+    source_document = ai_document(secret="sentinel-document-secret")
+    source_document["servers"] = [{"url": sentinels["base_url"]}]
+    source_document["components"]["securitySchemes"]["BearerAuth"][
+        "x-auth-sentinel"
+    ] = sentinels["auth"]
+    operation_data = source_document["paths"]["/users/{user_id}"]["get"]
+    operation_data["parameters"].extend(
+        [
+            {
+                "name": sentinels["header_name"],
+                "in": "header",
+                "example": sentinels["header_value"],
+                "schema": {"type": "string", "default": sentinels["default"]},
+            },
+            {
+                "name": "synthetic_cookie",
+                "in": "cookie",
+                "example": sentinels["cookie"],
+                "schema": {"type": "string"},
+            },
+        ]
+    )
+    operation_data["requestBody"] = {
+        "content": {
+            "application/json": {
+                "example": {"value": sentinels["example"]},
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "example": sentinels["example"],
+                            "default": sentinels["default"],
+                        }
+                    },
+                },
+            }
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "https://api.openai.com/v1/responses"
+        body = json.loads(request.content)
+        captured.append(body)
+        role = "candidate_evaluator" if len(captured) == 1 else "draft_evaluator"
+        result = {
+            "role": role,
+            "provider": "openai",
+            "model": "synthetic-model",
+            "score": 75,
+            "summary": "Synthetic evaluation",
+            "strengths": ["relative paths"],
+            "issues": [],
+            "recommendations": ["human review"],
+            "evaluated_case_count": 1,
+            "requires_human_review": True,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(result),
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+    provider = OpenAiProvider(
+        api_key="synthetic-api-key",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+    service = AiAssistantService(Settings(), provider=provider)
+    candidate_run = generated_candidate_run()
+    candidate_run.base_url = "https://sentinel-base-url.example.test"
+    candidate_run.cases[0].headers = {
+        sentinels["header_name"]: sentinels["header_value"],
+        "Cookie": sentinels["cookie"],
+    }
+    candidate_run.cases[0].json_body = {"value": sentinels["body"]}
+    candidate_run.variables = {"synthetic_variable": sentinels["variable"]}
+    candidate_run.secret_variables = ["synthetic_variable"]
+    candidate_request = AiCandidateEvaluationRequest(
+        document=source_document,
+        candidate_run=candidate_run,
+        insights=[],
+        objective="Synthetic candidate objective",
+    )
+    draft_request = AiDraftEvaluationRequest(
+        document=source_document,
+        draft=generated_candidate_run(),
+        objective="Synthetic draft objective",
+    )
+
+    candidate = service.evaluate_candidates(candidate_request)
+    draft = service.evaluate_draft(draft_request)
+
+    assert candidate.role is AiEvaluationRole.CANDIDATE_EVALUATOR
+    assert draft.role is AiEvaluationRole.DRAFT_EVALUATOR
+    assert len(captured) == 2
+    assert captured[0]["model"] == captured[1]["model"] == "synthetic-model"
+    assert captured[0]["store"] is captured[1]["store"] is False
+    assert captured[0]["instructions"] != captured[1]["instructions"]
+    assert "candidate" in captured[0]["instructions"].lower()
+    assert "draft" in captured[1]["instructions"].lower()
+    for body in captured:
+        assert body["text"]["format"]["type"] == "json_schema"
+        assert body["text"]["format"]["strict"] is True
+        assert body["text"]["format"]["schema"]
+        parsed_input = json.loads(body["input"])
+        serialized_input = json.dumps(parsed_input, ensure_ascii=False)
+        for sentinel in sentinels.values():
+            assert sentinel not in serialized_input
+
+
+def test_openai_evaluation_maps_unavailable_and_invalid_output() -> None:
+    def unavailable(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "synthetic"})
+
+    provider = OpenAiProvider(
+        api_key="synthetic",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(unavailable),
+    )
+    request = AiDraftEvaluationRequest(
+        document=ai_document(secret="error-source-secret"),
+        draft=generated_candidate_run(),
+    )
+    with pytest.raises(AiAssistantError) as unavailable_error:
+        AiAssistantService(Settings(), provider=provider).evaluate_draft(request)
+    assert unavailable_error.value.code == "AI_PROVIDER_UNAVAILABLE"
+    assert unavailable_error.value.status_code == 502
+    assert "error-source-secret" not in str(unavailable_error.value)
+
+    def invalid_output(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"output_text": "{}"})
+
+    provider = OpenAiProvider(
+        api_key="synthetic",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(invalid_output),
+    )
+    with pytest.raises(AiAssistantError) as invalid_error:
+        AiAssistantService(Settings(), provider=provider).evaluate_draft(request)
+    assert invalid_error.value.code == "AI_PROVIDER_INVALID_OUTPUT"
+    assert invalid_error.value.status_code == 502
+    assert "error-source-secret" not in str(invalid_error.value)
+
+
+def test_provider_bound_evaluation_text_is_sanitized_by_field() -> None:
+    captured: dict[str, object] = {}
+
+    class CaptureProvider:
+        name = "synthetic-provider"
+        model = "synthetic-model"
+
+        def evaluate(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "role": "candidate_evaluator",
+                "provider": self.name,
+                "model": self.model,
+                "score": 50,
+                "summary": "Synthetic evaluation",
+                "strengths": [],
+                "issues": [],
+                "recommendations": [],
+                "evaluated_case_count": 1,
+                "requires_human_review": True,
+            }
+
+    source_document = ai_document()
+    operation_data = source_document["paths"]["/users/{user_id}"]["get"]
+    operation_data["summary"] = "Bearer openapi-summary-sentinel"
+    operation_data["operationId"] = "https://operation-id-sentinel.example.test"
+    operation_data["parameters"][0]["schema"][
+        "type"
+    ] = "https://schema-type-sentinel.example.test"
+    operation_data["parameters"][1]["schema"]["type"] = (
+        "api_token=schema-credential-sentinel"
+    )
+
+    candidate_run = generated_candidate_run()
+    candidate_run.cases[0].name = "Bearer case-name-sentinel"
+    candidate_run.cases[0].path = "/users/https://case-path-sentinel.example.test"
+    candidate_run.cases[0].assertions[0].path = (
+        "https://assertion-path-sentinel.example.test"
+    )
+    candidate_run.cases[0].extract = [
+        ExtractionRule(name="user_id", path="Bearer extract-path-sentinel")
+    ]
+    request = AiCandidateEvaluationRequest(
+        document=source_document,
+        candidate_run=candidate_run,
+        insights=[
+            AiCaseInsight(
+                case_id="candidate_1",
+                category="boundary",
+                rationale="Bearer insight-rationale-sentinel",
+            )
+        ],
+        objective="https://objective-sentinel.example.test",
+    )
+
+    AiAssistantService(Settings(), provider=CaptureProvider()).evaluate_candidates(
+        request
+    )
+
+    serialized_input = json.dumps(
+        captured["evaluation_input"], ensure_ascii=False
+    )
+    for sentinel in (
+        "openapi-summary-sentinel",
+        "operation-id-sentinel",
+        "schema-type-sentinel",
+        "schema-credential-sentinel",
+        "case-name-sentinel",
+        "case-path-sentinel",
+        "assertion-path-sentinel",
+        "extract-path-sentinel",
+        "insight-rationale-sentinel",
+    ):
+        assert sentinel not in serialized_input
+    assert "objective-sentinel" not in str(captured["objective"])
+
+
+def test_safe_schema_omits_untrusted_schema_type_values() -> None:
+    schema = _safe_schema(
+        {
+            "type": "https://schema-type-sentinel.example.test",
+            "properties": {
+                "safe": {"type": "string"},
+                "credential": {"type": "api_token=schema-credential-sentinel"},
+            },
+        },
+        depth=0,
+    )
+
+    assert schema is not None
+    assert schema.get("type") in {None, "unknown"}
+    serialized = json.dumps(schema, ensure_ascii=False)
+    assert "schema-type-sentinel" not in serialized
+    assert "schema-credential-sentinel" not in serialized
+
+
+def test_openai_evaluation_schema_has_required_nullable_fields_recursively() -> None:
+    schema = ProviderEvaluation.model_json_schema()
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert "default" not in value
+            if value.get("type") == "object":
+                properties = value.get("properties", {})
+                assert value.get("additionalProperties") is False
+                assert set(value.get("required", [])) == set(properties)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(schema)
+    issue_schema = schema["$defs"]["AiEvaluationIssue"]
+    response_properties = schema["properties"]
+    assert "case_id" in issue_schema["required"]
+    assert "model" in schema["required"]
+    assert "requires_human_review" in schema["required"]
+    assert response_properties["model"]["anyOf"][-1] == {"type": "null"}
+    assert response_properties["requires_human_review"]["const"] is True
+
+
+def test_unconfigured_provider_validates_evaluation_input_before_provider_status() -> None:
+    service = AiAssistantService(Settings(ai_provider="openai"))
+
+    with pytest.raises(AiAssistantError) as invalid_document:
+        service.evaluate_candidates(
+            AiCandidateEvaluationRequest(
+                document={"openapi": "2.0", "paths": {}},
+                candidate_run=generated_candidate_run(),
+                insights=[],
+            )
+        )
+    assert invalid_document.value.code == "INVALID_AI_EVALUATION_INPUT"
+    assert invalid_document.value.status_code == 422
+
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    with pytest.raises(AiAssistantError) as oversized:
+        service.evaluate_candidates(
+            AiCandidateEvaluationRequest(
+                document=oversized_document,
+                candidate_run=generated_candidate_run(),
+                insights=[],
+            )
+        )
+    assert oversized.value.code == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert oversized.value.status_code == 422
+
+
+def test_evaluation_response_text_items_have_non_empty_bounded_lengths() -> None:
+    base = {
+        "role": "candidate_evaluator",
+        "provider": "mock",
+        "model": None,
+        "score": 50,
+        "summary": "Synthetic summary",
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "evaluated_case_count": 1,
+        "requires_human_review": True,
+    }
+
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "strengths": [""]})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "recommendations": ["x" * 501]}
+        )

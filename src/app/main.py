@@ -2,12 +2,17 @@ from pathlib import Path
 from functools import lru_cache
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings, target_is_allowed
 from app.schemas import (
+    AiCandidateEvaluationRequest,
+    AiDraftEvaluationRequest,
+    AiEvaluationResponse,
     AiGenerateRequest,
     AiGenerateResponse,
     AiProviderStatus,
@@ -40,6 +45,76 @@ from app.services.run_queue_store import RunQueueStore
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIRECTORY = REPOSITORY_ROOT / "frontend"
+AI_EVALUATION_PATHS = {
+    "/api/v1/ai/cases/evaluate",
+    "/api/v1/ai/drafts/evaluate",
+}
+AI_EVALUATION_ERROR_MESSAGE = "AI evaluation request failed"
+AI_EVALUATION_RESPONSES = {
+    422: {
+        "description": "Invalid AI evaluation input.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "invalid_input": {
+                        "value": {
+                            "detail": {
+                                "code": "INVALID_AI_EVALUATION_INPUT",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
+                    },
+                    "source_too_large": {
+                        "value": {
+                            "detail": {
+                                "code": "AI_EVALUATION_SOURCE_TOO_LARGE",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    },
+    502: {
+        "description": "AI provider is unavailable or returned invalid output.",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "provider_unavailable": {
+                        "value": {
+                            "detail": {
+                                "code": "AI_PROVIDER_UNAVAILABLE",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
+                    },
+                    "invalid_output": {
+                        "value": {
+                            "detail": {
+                                "code": "AI_PROVIDER_INVALID_OUTPUT",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
+                    },
+                }
+            }
+        },
+    },
+    503: {
+        "description": "AI provider is not configured.",
+        "content": {
+            "application/json": {
+                "example": {
+                    "detail": {
+                        "code": "AI_PROVIDER_NOT_CONFIGURED",
+                        "message": AI_EVALUATION_ERROR_MESSAGE,
+                    }
+                }
+            }
+        },
+    },
+}
 
 app = FastAPI(
     title="API Test Platform",
@@ -51,6 +126,24 @@ app.mount(
     StaticFiles(directory=FRONTEND_DIRECTORY, check_dir=False),
     name="static",
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    request: Request,
+    exc: RequestValidationError,
+):
+    if request.url.path in AI_EVALUATION_PATHS:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {
+                    "code": "INVALID_AI_EVALUATION_INPUT",
+                    "message": AI_EVALUATION_ERROR_MESSAGE,
+                }
+            },
+        )
+    return await request_validation_exception_handler(request, exc)
 
 
 @lru_cache
@@ -184,6 +277,50 @@ def generate_ai_cases(
         raise HTTPException(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
+        ) from None
+
+
+@app.post(
+    "/api/v1/ai/cases/evaluate",
+    response_model=AiEvaluationResponse,
+    tags=["ai-assistant", "ai-evaluation"],
+    responses=AI_EVALUATION_RESPONSES,
+)
+def evaluate_ai_candidates(
+    payload: AiCandidateEvaluationRequest,
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiEvaluationResponse:
+    try:
+        return assistant.evaluate_candidates(payload)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": AI_EVALUATION_ERROR_MESSAGE,
+            },
+        ) from None
+
+
+@app.post(
+    "/api/v1/ai/drafts/evaluate",
+    response_model=AiEvaluationResponse,
+    tags=["ai-assistant", "ai-evaluation"],
+    responses=AI_EVALUATION_RESPONSES,
+)
+def evaluate_ai_draft(
+    payload: AiDraftEvaluationRequest,
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiEvaluationResponse:
+    try:
+        return assistant.evaluate_draft(payload)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": AI_EVALUATION_ERROR_MESSAGE,
+            },
         ) from None
 
 

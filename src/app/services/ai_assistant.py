@@ -10,7 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
 from app.schemas import (
+    AiCandidateEvaluationRequest,
     AiCaseInsight,
+    AiDraftEvaluationRequest,
+    AiEvaluationIssue,
+    AiEvaluationResponse,
+    AiEvaluationRole,
+    AiEvaluationSeverity,
     AiGenerateRequest,
     AiGenerateResponse,
     AiProviderStatus,
@@ -33,9 +39,25 @@ MAX_OPERATIONS = 50
 MAX_PROMPT_BYTES = 65_536
 MAX_SCHEMA_DEPTH = 5
 MAX_CASE_BYTES = 65_536
+MAX_CANDIDATE_EVALUATION_CASES = 10
 SUPPORTED_METHODS = ("get", "post", "put", "patch", "delete")
+SAFE_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
 SENSITIVE_FIELD_PATTERN = re.compile(
     r"(?:authorization|api[-_]?key|token|secret|password|cookie|session)",
+    re.IGNORECASE,
+)
+CREDENTIAL_VALUE_PATTERN = re.compile(
+    r"(?:bearer\s+\S+|(?:api[-_]?key|token|secret|password|authorization|cookie)\s*(?:=|:)\s*\S+)",
+    re.IGNORECASE,
+)
+ABSOLUTE_URL_PATTERN = re.compile(
+    r"\b(?:https?|wss?)://[^\s<>'\"`]+",
+    re.IGNORECASE,
+)
+PROVIDER_SENSITIVE_TEXT_PATTERN = re.compile(
+    r"(?:authorization|api[-_ ]?key|token|secret|password|cookie|session|bearer)\b",
     re.IGNORECASE,
 )
 
@@ -81,6 +103,10 @@ class ProviderOutput(BaseModel):
     candidates: list[ProviderCandidate] = Field(min_length=1, max_length=10)
 
 
+class ProviderEvaluation(AiEvaluationResponse):
+    """The untrusted, structured evaluation returned by an AI provider."""
+
+
 class AiProvider(Protocol):
     name: str
     model: str | None
@@ -92,6 +118,14 @@ class AiProvider(Protocol):
         objective: str,
         max_cases: int,
     ) -> ProviderOutput: ...
+
+    def evaluate(
+        self,
+        *,
+        role: AiEvaluationRole,
+        evaluation_input: dict[str, Any],
+        objective: str,
+    ) -> ProviderEvaluation: ...
 
 
 class MockAiProvider:
@@ -183,6 +217,79 @@ class MockAiProvider:
             )
         return ProviderOutput(candidates=candidates)
 
+    def evaluate(
+        self,
+        *,
+        role: AiEvaluationRole,
+        evaluation_input: dict[str, Any],
+        objective: str,
+    ) -> ProviderEvaluation:
+        del objective
+        cases = evaluation_input.get("cases", [])
+        if not isinstance(cases, list):
+            raise _invalid_output()
+
+        if role is AiEvaluationRole.CANDIDATE_EVALUATOR:
+            insights = evaluation_input.get("insights", [])
+            categories = {
+                item.get("category")
+                for item in insights
+                if isinstance(item, dict) and isinstance(item.get("category"), str)
+            }
+            missing_categories = sorted(
+                set(CandidateCategory._value2member_map_) - categories
+            )
+            issues = [
+                AiEvaluationIssue(
+                    case_id=None,
+                    severity=AiEvaluationSeverity.WARNING,
+                    title="Candidate category coverage is incomplete",
+                    detail="The candidate set does not cover every advisory category.",
+                    suggestion="Add a human-reviewed case for the missing category.",
+                )
+            ] if missing_categories else []
+            return ProviderEvaluation(
+                role=role,
+                provider=self.name,
+                model=self.model,
+                score=max(0, 90 - 10 * len(missing_categories)),
+                summary="Mock candidate evaluation completed from the sanitized case summary.",
+                strengths=["Candidate evaluation uses only relative-path case metadata."],
+                issues=issues,
+                recommendations=["Review all candidates before adding them to a draft."],
+                evaluated_case_count=len(cases),
+                requires_human_review=True,
+            )
+
+        executable = sum(
+            1
+            for case in cases
+            if isinstance(case, dict) and case.get("assertions")
+        )
+        issues = []
+        if executable != len(cases):
+            issues.append(
+                AiEvaluationIssue(
+                    case_id=None,
+                    severity=AiEvaluationSeverity.WARNING,
+                    title="Some draft cases have no assertion metadata",
+                    detail="A draft case without assertions cannot provide a useful result.",
+                    suggestion="Add at least one human-reviewed assertion to each case.",
+                )
+            )
+        return ProviderEvaluation(
+            role=role,
+            provider=self.name,
+            model=self.model,
+            score=85 if executable == len(cases) else 65,
+            summary="Mock draft evaluation completed from the sanitized draft summary.",
+            strengths=["Draft evaluation checks assertions and dependency metadata."],
+            issues=issues,
+            recommendations=["Review the draft before manually running it."],
+            evaluated_case_count=len(cases),
+            requires_human_review=True,
+        )
+
 
 class OpenAiProvider:
     name = "openai"
@@ -207,21 +314,12 @@ class OpenAiProvider:
         objective: str,
         max_cases: int,
     ) -> ProviderOutput:
-        prompt = json.dumps(
-            {
-                "objective": objective,
-                "max_cases": max_cases,
-                "api_structure": outline,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
+        prompt = _generation_prompt(
+            objective=objective,
+            outline=outline,
+            max_cases=max_cases,
         )
-        if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-            raise AiAssistantError(
-                "AI_SOURCE_DOCUMENT_TOO_LARGE",
-                "sanitized API structure exceeds the AI prompt limit",
-                status_code=422,
-            )
+        _validate_generation_prompt_size(prompt)
 
         body = {
             "model": self.model,
@@ -277,6 +375,63 @@ class OpenAiProvider:
                 status_code=502,
             ) from None
 
+    def evaluate(
+        self,
+        *,
+        role: AiEvaluationRole,
+        evaluation_input: dict[str, Any],
+        objective: str,
+    ) -> ProviderEvaluation:
+        prompt = _evaluation_prompt(
+            objective=objective,
+            evaluation_input=evaluation_input,
+        )
+        _validate_evaluation_prompt_size(prompt)
+        body = {
+            "model": self.model,
+            "store": False,
+            "instructions": _evaluation_instructions(role),
+            "input": prompt,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "api_test_evaluation",
+                    "strict": True,
+                    "schema": ProviderEvaluation.model_json_schema(),
+                }
+            },
+        }
+        try:
+            with httpx.Client(
+                timeout=self._timeout_seconds,
+                transport=self._transport,
+            ) as client:
+                response = client.post(
+                    "https://api.openai.com/v1/responses",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise AiAssistantError(
+                "AI_PROVIDER_UNAVAILABLE",
+                "AI provider request failed",
+                status_code=502,
+            ) from None
+
+        try:
+            return ProviderEvaluation.model_validate_json(_response_output_text(payload))
+        except (AiAssistantError, ValidationError, ValueError):
+            raise AiAssistantError(
+                "AI_PROVIDER_INVALID_OUTPUT",
+                "AI provider returned an invalid structured response",
+                status_code=502,
+            ) from None
+
 
 class AiAssistantService:
     def __init__(
@@ -311,17 +466,24 @@ class AiAssistantService:
         )
 
     def generate(self, request: AiGenerateRequest) -> AiGenerateResponse:
+        baseline = _baseline_run(request)
+        outline = build_safe_outline(request.document)
+        _validate_generation_prompt_size(
+            _generation_prompt(
+                objective=request.objective,
+                outline=outline,
+                max_cases=request.max_cases,
+            )
+        )
         if self._provider is None:
             raise AiAssistantError(
                 "AI_PROVIDER_NOT_CONFIGURED",
                 "OpenAI provider requires OPENAI_API_KEY",
                 status_code=503,
             )
-        baseline = _baseline_run(request)
-        outline = build_safe_outline(request.document)
         provider_output = self._provider.generate(
             outline=outline,
-            objective=request.objective,
+            objective=_sanitize_provider_text(request.objective, 500) or "",
             max_cases=request.max_cases,
         )
         cases, insights, warnings = _validate_candidates(
@@ -343,26 +505,110 @@ class AiAssistantService:
             ),
         )
 
+    def evaluate_candidates(
+        self, request: AiCandidateEvaluationRequest
+    ) -> AiEvaluationResponse:
+        return self._evaluate(
+            role=AiEvaluationRole.CANDIDATE_EVALUATOR,
+            run=request.candidate_run,
+            document=request.document,
+            insights=request.insights,
+            objective=request.objective,
+            max_cases=MAX_CANDIDATE_EVALUATION_CASES,
+        )
+
+    def evaluate_draft(
+        self, request: AiDraftEvaluationRequest
+    ) -> AiEvaluationResponse:
+        return self._evaluate(
+            role=AiEvaluationRole.DRAFT_EVALUATOR,
+            run=request.draft,
+            document=request.document,
+            insights=None,
+            objective=request.objective,
+            max_cases=50,
+        )
+
+    def _evaluate(
+        self,
+        *,
+        role: AiEvaluationRole,
+        run: TestRunRequest,
+        document: dict[str, Any] | None,
+        insights: list[AiCaseInsight] | None,
+        objective: str,
+        max_cases: int,
+    ) -> AiEvaluationResponse:
+        if len(run.cases) > max_cases:
+            raise _invalid_evaluation_input("evaluation case count exceeds its limit")
+
+        case_ids = _evaluation_case_ids(run)
+        if insights is not None:
+            _validate_evaluation_insights(insights, case_ids)
+        evaluation_input = _build_evaluation_input(
+            run=run,
+            role=role,
+            document=document,
+            insights=insights,
+        )
+        _validate_evaluation_prompt_size(
+            _evaluation_prompt(
+                objective=_sanitize_provider_text(objective, 500) or "",
+                evaluation_input=evaluation_input,
+            )
+        )
+        if self._provider is None:
+            raise AiAssistantError(
+                "AI_PROVIDER_NOT_CONFIGURED",
+                "OpenAI provider requires OPENAI_API_KEY",
+                status_code=503,
+            )
+        evaluator = getattr(self._provider, "evaluate", None)
+        if not callable(evaluator):
+            raise _invalid_output()
+        try:
+            provider_evaluation = ProviderEvaluation.model_validate(
+                evaluator(
+                    role=role,
+                    evaluation_input=evaluation_input,
+                    objective=_sanitize_provider_text(objective, 500) or "",
+                )
+            )
+        except AiAssistantError:
+            raise
+        except (ValidationError, ValueError, TypeError):
+            raise _invalid_output() from None
+        except Exception:
+            raise AiAssistantError(
+                "AI_PROVIDER_UNAVAILABLE",
+                "AI provider request failed",
+                status_code=502,
+            ) from None
+
+        _validate_provider_evaluation(
+            provider_evaluation,
+            role=role,
+            case_ids=case_ids,
+            case_count=len(run.cases),
+        )
+        provider_name = getattr(self._provider, "name", None)
+        provider_model = getattr(self._provider, "model", None)
+        if not isinstance(provider_name, str) or not provider_name:
+            raise _invalid_output()
+        if provider_model is not None and not isinstance(provider_model, str):
+            raise _invalid_output()
+        return AiEvaluationResponse(
+            **provider_evaluation.model_dump(
+                exclude={"provider", "model", "requires_human_review"}
+            ),
+            provider=provider_name,
+            model=provider_model,
+            requires_human_review=True,
+        )
+
 
 def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
-    try:
-        serialized = json.dumps(
-            document,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError):
-        raise AiAssistantError(
-            "INVALID_AI_SOURCE_DOCUMENT",
-            "OpenAPI document must be JSON serializable",
-            status_code=422,
-        ) from None
-    if len(serialized) > MAX_DOCUMENT_BYTES:
-        raise AiAssistantError(
-            "AI_SOURCE_DOCUMENT_TOO_LARGE",
-            "OpenAPI document exceeds the 1 MiB limit",
-            status_code=422,
-        )
+    _validate_source_document_size(document)
 
     version = document.get("openapi")
     if not isinstance(version, str) or not re.fullmatch(r"3\.(?:0|1)\.\d+", version):
@@ -391,6 +637,9 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
             path_item, dict
         ):
             continue
+        safe_path = _sanitize_provider_text(path, 2048, fallback=None)
+        if safe_path is None:
+            continue
         inherited = path_item.get("parameters", [])
         for method in SUPPORTED_METHODS:
             operation = path_item.get(method)
@@ -401,7 +650,7 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
             operations.append(
                 {
                     "method": method.upper(),
-                    "path": path[:2048],
+                    "path": safe_path,
                     "operation_id": _safe_text(operation.get("operationId"), 120),
                     "summary": _safe_text(operation.get("summary"), 200),
                     "parameters": parameters,
@@ -435,6 +684,29 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
     return outline
 
 
+def _validate_source_document_size(document: dict[str, Any]) -> None:
+    try:
+        serialized_size = len(
+            json.dumps(
+                document,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError):
+        raise AiAssistantError(
+            "INVALID_AI_SOURCE_DOCUMENT",
+            "OpenAPI document must be JSON serializable",
+            status_code=422,
+        ) from None
+    if serialized_size > MAX_DOCUMENT_BYTES:
+        raise AiAssistantError(
+            "AI_SOURCE_DOCUMENT_TOO_LARGE",
+            "OpenAPI document exceeds the 1 MiB limit",
+            status_code=422,
+        )
+
+
 def _provider_from_settings(settings: Settings) -> AiProvider:
     if settings.ai_provider == "mock":
         return MockAiProvider()
@@ -451,7 +723,288 @@ def _provider_from_settings(settings: Settings) -> AiProvider:
     )
 
 
+def _build_evaluation_input(
+    *,
+    run: TestRunRequest,
+    role: AiEvaluationRole,
+    document: dict[str, Any] | None,
+    insights: list[AiCaseInsight] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "cases": _safe_evaluation_cases(run, role),
+    }
+    if document is not None:
+        try:
+            result["api_structure"] = build_safe_outline(document)
+        except AiAssistantError as exc:
+            if exc.code == "AI_SOURCE_DOCUMENT_TOO_LARGE":
+                raise AiAssistantError(
+                    "AI_EVALUATION_SOURCE_TOO_LARGE",
+                    "evaluation source exceeds the allowed size",
+                    status_code=422,
+                ) from None
+            raise _invalid_evaluation_input("evaluation source is invalid") from None
+    if insights is not None:
+        result["insights"] = [
+            {
+                "case_id": insight.case_id,
+                "category": insight.category,
+                "rationale": _sanitize_provider_text(insight.rationale, 500)
+                or "[redacted-rationale]",
+            }
+            for insight in insights
+        ]
+    return result
+
+
+def _safe_evaluation_cases(
+    run: TestRunRequest,
+    role: AiEvaluationRole,
+) -> list[dict[str, Any]]:
+    safe_cases: list[dict[str, Any]] = []
+    for index, case in enumerate(run.cases, start=1):
+        safe_query: list[dict[str, Any]] = []
+        for name, value in case.query.items():
+            safe_name = _sanitize_provider_text(name, 120, fallback=None)
+            if safe_name is None:
+                continue
+            safe_query.append(
+                {
+                    "name": safe_name,
+                    "value_shape": _safe_value_shape(value, depth=0),
+                }
+            )
+
+        safe_extract: list[dict[str, str]] = []
+        for rule in case.extract:
+            if rule.secret:
+                continue
+            safe_name = _sanitize_provider_text(rule.name, 120, fallback=None)
+            safe_path = _sanitize_provider_text(rule.path, 256, fallback=None)
+            if safe_name is None or safe_path is None:
+                continue
+            safe_extract.append({"name": safe_name, "path": safe_path})
+
+        safe_dependencies = [
+            safe_dependency
+            for dependency in case.depends_on
+            if (
+                safe_dependency := _sanitize_provider_text(
+                    dependency, 64, fallback=None
+                )
+            )
+            is not None
+        ][:50]
+        item: dict[str, Any] = {
+            "id": case.id or f"case_{index}",
+            "name": _sanitize_provider_text(case.name, 120)
+            or "[unnamed-case]",
+            "method": case.method.value,
+            "path": _sanitize_provider_text(case.path, 2048)
+            or "[redacted-path]",
+            "query": safe_query[:50],
+            "assertions": _safe_evaluation_assertions(case, role),
+            "depends_on": safe_dependencies,
+            "extract": safe_extract[:50],
+        }
+        if role is AiEvaluationRole.DRAFT_EVALUATOR:
+            item["json_body_shape"] = _safe_value_shape(case.json_body, depth=0)
+        safe_cases.append(item)
+    return safe_cases
+
+
+def _safe_evaluation_assertions(
+    case: TestCase,
+    role: AiEvaluationRole,
+) -> list[dict[str, Any]]:
+    assertions: list[dict[str, Any]] = []
+    for assertion in case.assertions[:50]:
+        item: dict[str, Any] = {"type": assertion.type.value}
+        safe_path = (
+            _sanitize_provider_text(assertion.path, 256, fallback=None)
+            if assertion.path
+            else None
+        )
+        if safe_path is not None:
+            item["path"] = safe_path
+        if (
+            role is AiEvaluationRole.CANDIDATE_EVALUATOR
+            and assertion.type is AssertionType.STATUS_CODE
+            and isinstance(assertion.expected, int)
+        ):
+            item["expected_status"] = assertion.expected
+        elif role is AiEvaluationRole.DRAFT_EVALUATOR:
+            item["expected_shape"] = _safe_value_shape(assertion.expected, depth=0)
+        assertions.append(item)
+    return assertions
+
+
+def _safe_value_shape(value: Any, *, depth: int) -> dict[str, Any]:
+    if depth >= MAX_SCHEMA_DEPTH:
+        return {"type": "truncated"}
+    if value is None:
+        return {"type": "null"}
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int):
+        return {"type": "integer"}
+    if isinstance(value, float):
+        return {"type": "number"}
+    if isinstance(value, str):
+        return {"type": "string"}
+    if isinstance(value, list):
+        return {
+            "type": "array",
+            "items": [
+                _safe_value_shape(item, depth=depth + 1) for item in value[:10]
+            ],
+        }
+    if isinstance(value, dict):
+        safe_properties: dict[str, dict[str, Any]] = {}
+        for key, item in list(value.items())[:50]:
+            safe_key = _sanitize_provider_text(str(key), 120, fallback=None)
+            if safe_key is not None:
+                safe_properties[safe_key] = _safe_value_shape(item, depth=depth + 1)
+        return {
+            "type": "object",
+            "properties": safe_properties,
+        }
+    return {"type": "unknown"}
+
+
+def _evaluation_prompt(*, objective: str, evaluation_input: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "objective": _sanitize_provider_text(objective, 500) or "",
+            "evaluation": evaluation_input,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _generation_prompt(
+    *,
+    objective: str,
+    outline: dict[str, Any],
+    max_cases: int,
+) -> str:
+    return json.dumps(
+        {
+            "objective": _sanitize_provider_text(objective, 500) or "",
+            "max_cases": max_cases,
+            "api_structure": outline,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _validate_generation_prompt_size(prompt: str) -> None:
+    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+        raise AiAssistantError(
+            "AI_SOURCE_DOCUMENT_TOO_LARGE",
+            "sanitized API structure exceeds the AI prompt limit",
+            status_code=422,
+        )
+
+
+def _validate_evaluation_prompt_size(prompt: str) -> None:
+    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+        raise AiAssistantError(
+            "AI_EVALUATION_SOURCE_TOO_LARGE",
+            "sanitized evaluation input exceeds the AI prompt limit",
+            status_code=422,
+        )
+
+
+def _evaluation_instructions(role: AiEvaluationRole) -> str:
+    if role is AiEvaluationRole.CANDIDATE_EVALUATOR:
+        role_instruction = (
+            "You are the candidate evaluator. Assess candidate coverage, category "
+            "balance, and the supplied boundary or negative rationale."
+        )
+    else:
+        role_instruction = (
+            "You are the draft evaluator. Assess assertion coverage, dependency "
+            "ordering, and whether each draft case is structurally executable."
+        )
+    return (
+        f"{role_instruction} Use only the sanitized evaluation summary. Provide "
+        "advisory feedback only: never modify cases, execute tests, persist data, "
+        "request credentials, or include absolute URLs or raw secrets. Return only "
+        "JSON matching the supplied schema. Human review is always required."
+    )
+
+
+def _evaluation_case_ids(run: TestRunRequest) -> set[str]:
+    return {
+        case.id or f"case_{index}"
+        for index, case in enumerate(run.cases, start=1)
+    }
+
+
+def _validate_evaluation_insights(
+    insights: list[AiCaseInsight], case_ids: set[str]
+) -> None:
+    if len(insights) > MAX_CANDIDATE_EVALUATION_CASES:
+        raise _invalid_evaluation_input("too many candidate insights")
+    seen: set[str] = set()
+    allowed_categories = set(CandidateCategory._value2member_map_)
+    for insight in insights:
+        if (
+            not isinstance(insight.case_id, str)
+            or not re.fullmatch(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$", insight.case_id)
+            or insight.case_id not in case_ids
+            or insight.case_id in seen
+            or insight.category not in allowed_categories
+            or not isinstance(insight.rationale, str)
+            or not 1 <= len(insight.rationale) <= 500
+        ):
+            raise _invalid_evaluation_input("candidate insights are invalid")
+        seen.add(insight.case_id)
+
+
+def _validate_provider_evaluation(
+    evaluation: ProviderEvaluation,
+    *,
+    role: AiEvaluationRole,
+    case_ids: set[str],
+    case_count: int,
+) -> None:
+    if evaluation.role is not role or evaluation.evaluated_case_count != case_count:
+        raise _invalid_output()
+    for issue in evaluation.issues:
+        if issue.case_id is not None and issue.case_id not in case_ids:
+            raise _invalid_output()
+    text_values = [
+        evaluation.summary,
+        *evaluation.strengths,
+        *evaluation.recommendations,
+        *(
+            text
+            for issue in evaluation.issues
+            for text in (issue.title, issue.detail, issue.suggestion)
+        ),
+    ]
+    if any(_unsafe_evaluation_text(value) for value in text_values):
+        raise _invalid_output()
+
+
+def _unsafe_evaluation_text(value: str) -> bool:
+    return "://" in value or bool(CREDENTIAL_VALUE_PATTERN.search(value))
+
+
+def _invalid_evaluation_input(message: str) -> AiAssistantError:
+    return AiAssistantError(
+        "INVALID_AI_EVALUATION_INPUT",
+        message,
+        status_code=422,
+    )
+
+
 def _baseline_run(request: AiGenerateRequest) -> TestRunRequest:
+    _validate_source_document_size(request.document)
     try:
         generated = generate_openapi_cases(
             OpenApiGenerateRequest(
@@ -569,14 +1122,18 @@ def _safe_parameters(inherited: Any, operation_parameters: Any) -> list[dict[str
                 continue
             name = parameter.get("name")
             location = parameter.get("in")
+            safe_name = (
+                _sanitize_provider_text(name, 120, fallback=None)
+                if isinstance(name, str)
+                else None
+            )
             if (
-                not isinstance(name, str)
+                safe_name is None
                 or location not in {"path", "query"}
-                or SENSITIVE_FIELD_PATTERN.search(name)
             ):
                 continue
             combined[(name, location)] = {
-                "name": name[:120],
+                "name": safe_name,
                 "in": location,
                 "required": bool(parameter.get("required")),
                 "schema": _safe_schema(parameter.get("schema"), depth=0),
@@ -592,7 +1149,9 @@ def _safe_schema(value: Any, *, depth: int) -> dict[str, Any] | None:
     result: dict[str, Any] = {}
     schema_type = value.get("type")
     if isinstance(schema_type, str):
-        result["type"] = schema_type[:30]
+        result["type"] = (
+            schema_type if schema_type in SAFE_SCHEMA_TYPES else "unknown"
+        )
     for key in (
         "format",
         "minimum",
@@ -606,24 +1165,37 @@ def _safe_schema(value: Any, *, depth: int) -> dict[str, Any] | None:
         "pattern",
     ):
         item = value.get(key)
-        if isinstance(item, (str, int, float, bool)):
+        if isinstance(item, str):
+            safe_item = _sanitize_provider_text(item, 256, fallback=None)
+            if safe_item is not None:
+                result[key] = safe_item
+        elif isinstance(item, (int, float, bool)):
             result[key] = item
     if isinstance(value.get("enum"), list):
         result["enum_count"] = len(value["enum"])
     required = value.get("required")
     if isinstance(required, list):
         result["required"] = [
-            item[:120]
+            safe_item
             for item in required
-            if isinstance(item, str) and not SENSITIVE_FIELD_PATTERN.search(item)
+            if (
+                isinstance(item, str)
+                and (safe_item := _sanitize_provider_text(item, 120, fallback=None))
+                is not None
+            )
         ][:50]
     properties = value.get("properties")
     if isinstance(properties, dict):
         safe_properties = {}
         for name, child in list(properties.items())[:50]:
-            if not isinstance(name, str) or SENSITIVE_FIELD_PATTERN.search(name):
+            safe_name = (
+                _sanitize_provider_text(name, 120, fallback=None)
+                if isinstance(name, str)
+                else None
+            )
+            if safe_name is None:
                 continue
-            safe_properties[name[:120]] = _safe_schema(child, depth=depth + 1)
+            safe_properties[safe_name] = _safe_schema(child, depth=depth + 1)
         result["properties"] = safe_properties
     if "items" in value:
         result["items"] = _safe_schema(value.get("items"), depth=depth + 1)
@@ -643,17 +1215,41 @@ def _request_body_schema(request_body: Any) -> Any:
 def _response_statuses(responses: Any) -> list[str]:
     if not isinstance(responses, dict):
         return []
-    return [
-        str(status)[:16]
-        for status in responses
-        if isinstance(status, (str, int))
-    ][:30]
+    safe_statuses: list[str] = []
+    for status in responses:
+        if not isinstance(status, (str, int)):
+            continue
+        safe_status = _sanitize_provider_text(str(status), 16, fallback=None)
+        if safe_status is None or not (
+            safe_status == "default" or safe_status.isdigit()
+        ):
+            continue
+        safe_statuses.append(safe_status)
+    return safe_statuses[:30]
 
 
 def _safe_text(value: Any, limit: int) -> str | None:
+    return _sanitize_provider_text(value, limit)
+
+
+def _sanitize_provider_text(
+    value: Any,
+    limit: int,
+    *,
+    fallback: str | None = "[redacted]",
+) -> str | None:
     if not isinstance(value, str):
         return None
-    return value[:limit]
+    normalized = value.replace("\x00", " ").strip()
+    if not normalized:
+        return ""
+    if (
+        ABSOLUTE_URL_PATTERN.search(normalized)
+        or CREDENTIAL_VALUE_PATTERN.search(normalized)
+        or PROVIDER_SENSITIVE_TEXT_PATTERN.search(normalized)
+    ):
+        return fallback
+    return normalized[:limit]
 
 
 def _matching_template(

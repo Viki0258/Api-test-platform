@@ -1866,3 +1866,641 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+dialog#ai-feedback-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  padding: 0;
+  color: var(--ink);
+  background: var(--panel);
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+dialog#ai-feedback-dialog::backdrop {
+  background: rgba(23, 32, 51, 0.52);
+  backdrop-filter: blur(2px);
+}
+
+.ai-feedback-shell {
+  max-height: inherit;
+  padding: clamp(1.1rem, 3vw, 2rem);
+  overflow-y: auto;
+}
+
+.ai-feedback-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-feedback-heading h2 {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.7rem);
+}
+
+.ai-feedback-heading .step-label {
+  margin: 0 0 0.25rem;
+}
+
+.ai-feedback-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-feedback-switcher .button {
+  font-size: 0.75rem;
+}
+
+#ai-feedback-stale {
+  margin: 0.8rem 0 0;
+}
+
+#ai-feedback-time {
+  margin: 0.6rem 0 0;
+}
+
+#ai-feedback-status,
+#ai-feedback-summary,
+#ai-feedback-score {
+  margin: 1rem 0 0;
+}
+
+#ai-feedback-score {
+  color: var(--brand-dark);
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.ai-feedback-shell section {
+  margin-top: 1.35rem;
+}
+
+.ai-feedback-shell h3 {
+  margin: 0 0 0.55rem;
+  font-size: 1rem;
+}
+
+.ai-feedback-shell ul {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.ai-feedback-issue {
+  padding: 0.75rem;
+  list-style-position: inside;
+  background: var(--subtle);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+}
+
+.ai-feedback-issue.severity-warning {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ai-feedback-issue.severity-error {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ai-feedback-issue p {
+  margin: 0.45rem 0 0;
+}
+
+.ai-feedback-suggestion {
+  color: var(--brand-dark);
+}
+
+.ai-evaluation-status {
+  margin-bottom: 0;
+}
+
+/* Compact console theme: reduce visual noise without hiding any workflow step. */
+.compact-console {
+  --line: #e4e8ef;
+  --subtle: #f5f7fa;
+  --shadow: 0 1px 2px rgba(23, 32, 51, 0.04);
+  --radius: 14px;
+  background: #f7f8fa;
+}
+
+.compact-console .shell {
+  width: min(1120px, calc(100% - 32px));
+}
+
+.compact-console .site-header {
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.compact-console .header-content {
+  min-height: 64px;
+}
+
+.compact-console .brand {
+  gap: 0.65rem;
+}
+
+.compact-console .brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 0.74rem;
+}
+
+.compact-console .brand strong {
+  font-size: 0.88rem;
+}
+
+.compact-console .brand small {
+  font-size: 0.6rem;
+}
+
+.compact-console .environment-badge {
+  padding: 0.28rem 0.58rem;
+  font-size: 0.68rem;
+}
+
+.compact-console .hero {
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 310px);
+  gap: 1.5rem;
+  padding: 42px 0 24px;
+}
+
+.compact-console .eyebrow,
+.compact-console .step-label {
+  margin-bottom: 0.3rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+}
+
+.compact-console h1 {
+  max-width: 660px;
+  font-size: clamp(1.85rem, 4.2vw, 3rem);
+  letter-spacing: -0.04em;
+}
+
+.compact-console .hero-copy {
+  max-width: 620px;
+  margin-top: 0.8rem;
+  font-size: 0.92rem;
+}
+
+.compact-console .hero-actions {
+  gap: 8px;
+  margin-top: 1rem;
+}
+
+.compact-console .hero-actions .button {
+  min-width: 150px;
+}
+
+.compact-console .hero-boundary {
+  padding: 1rem;
+  background: #fff;
+  border-color: var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.compact-console .hero-boundary strong {
+  margin-top: 0.6rem;
+  font-size: 0.9rem;
+}
+
+.compact-console .hero-boundary ul {
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+  font-size: 0.7rem;
+}
+
+.compact-console .workflow-nav {
+  top: 64px;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 4px;
+  background: rgba(247, 248, 250, 0.94);
+  border-color: var(--line);
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(23, 32, 51, 0.04);
+}
+
+.compact-console .workflow-step {
+  min-width: 126px;
+  gap: 0 0.45rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+}
+
+.compact-console .workflow-step > span {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 0.66rem;
+}
+
+.compact-console .workflow-step strong {
+  font-size: 0.72rem;
+}
+
+.compact-console .workflow-step small {
+  font-size: 0.6rem;
+}
+
+.compact-console .workflow-guidance {
+  gap: 0.7rem;
+  margin-bottom: 16px;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+
+.compact-console .guidance-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.compact-console .workflow-guidance strong {
+  font-size: 0.78rem;
+}
+
+.compact-console .workflow-guidance p,
+.compact-console .workflow-guidance > a {
+  font-size: 0.68rem;
+}
+
+.compact-console .stage-panel,
+.compact-console .stage-workspace,
+.compact-console .history-panel {
+  scroll-margin-top: 140px;
+}
+
+.compact-console .stage-panel,
+.compact-console .openapi-panel,
+.compact-console .ai-panel,
+.compact-console .review-panel {
+  margin-bottom: 16px;
+}
+
+.compact-console .stage-panel::before {
+  width: 3px;
+}
+
+.compact-console .panel {
+  padding: clamp(18px, 2.4vw, 26px);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.compact-console .panel-heading {
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+
+.compact-console .panel-heading h2,
+.compact-console .explanation h2 {
+  font-size: 1.16rem;
+}
+
+.compact-console .openapi-intro {
+  max-width: 680px;
+  margin-top: 0.3rem;
+  font-size: 0.76rem;
+}
+
+.compact-console .field {
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.compact-console .field input,
+.compact-console .candidate-fields select {
+  min-height: 40px;
+  padding: 0.58rem 0.72rem;
+  border-radius: 8px;
+}
+
+.compact-console textarea {
+  border-radius: 8px;
+}
+
+.compact-console .field-help,
+.compact-console .privacy-note,
+.compact-console .muted,
+.compact-console .duration {
+  font-size: 0.7rem;
+}
+
+.compact-console .field-help {
+  margin: 0.3rem 0 1.1rem;
+}
+
+.compact-console .openapi-layout,
+.compact-console .ai-layout {
+  gap: 16px;
+}
+
+.compact-console .openapi-options {
+  gap: 8px;
+}
+
+.compact-console .openapi-actions {
+  gap: 8px;
+  margin-top: 0.9rem;
+}
+
+.compact-console .openapi-output {
+  padding: 0.85rem;
+  background: #fbfcfd;
+  border-radius: 10px;
+}
+
+.compact-console .openapi-output > h3 {
+  font-size: 0.9rem;
+}
+
+.compact-console .openapi-summary {
+  gap: 6px;
+  margin: 0.75rem 0;
+}
+
+.compact-console .openapi-summary > div {
+  padding: 0.65rem;
+  border-radius: 8px;
+}
+
+.compact-console .openapi-summary dd {
+  font-size: 1.2rem;
+}
+
+.compact-console .openapi-warning-heading {
+  margin-top: 0.9rem;
+}
+
+.compact-console .openapi-warnings {
+  gap: 6px;
+}
+
+.compact-console .openapi-warning-item,
+.compact-console .openapi-empty-warning {
+  padding: 0.6rem;
+  border-radius: 8px;
+  font-size: 0.7rem;
+}
+
+.compact-console .source-details {
+  margin: 0.7rem 0 0.85rem;
+  border-radius: 9px;
+}
+
+.compact-console .source-details summary {
+  padding: 0.65rem 0.75rem;
+  font-size: 0.74rem;
+}
+
+.compact-console .source-details-content {
+  padding: 0 0.75rem 0.75rem;
+}
+
+.compact-console .button {
+  min-height: 38px;
+  padding: 0.55rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+.compact-console .button-primary {
+  min-height: 42px;
+  box-shadow: none;
+}
+
+.compact-console .button-secondary {
+  background: #fff;
+}
+
+.compact-console .status-message {
+  margin-top: 0.8rem;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.72rem;
+}
+
+.compact-console .review-toolbar {
+  top: 140px;
+  gap: 6px;
+  padding: 0.5rem;
+  border-radius: 9px;
+}
+
+.compact-console .review-toolbar .button {
+  flex-basis: 150px;
+}
+
+.compact-console .candidate-list,
+.compact-console .case-results {
+  gap: 8px;
+}
+
+.compact-console .candidate-list {
+  margin-top: 0.8rem;
+}
+
+.compact-console .candidate-card {
+  border-radius: 10px;
+}
+
+.compact-console .candidate-summary {
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.compact-console .candidate-editor {
+  padding: 0 0.85rem 0.85rem;
+}
+
+.compact-console .stage-workspace {
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.compact-console .stage-workspace::before {
+  height: 3px;
+  border-radius: 14px 14px 0 0;
+}
+
+.compact-console .overview-item {
+  gap: 0.6rem;
+  padding: 0.7rem;
+  border-radius: 9px;
+}
+
+.compact-console .case-number {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 0.68rem;
+}
+
+.compact-console .case-overview {
+  gap: 8px;
+  margin: 0.7rem 0 1rem;
+}
+
+.compact-console .advanced {
+  margin-top: 0.8rem;
+}
+
+.compact-console .advanced summary {
+  padding: 0.7rem 0;
+  font-size: 0.76rem;
+}
+
+.compact-console .action-row {
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+
+.compact-console .empty-state {
+  min-height: 240px;
+  padding: 1.25rem;
+}
+
+.compact-console .empty-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.compact-console .summary-grid {
+  gap: 6px;
+}
+
+.compact-console .summary-grid > div {
+  padding: 0.65rem;
+  border-radius: 8px;
+}
+
+.compact-console .summary-grid dd {
+  font-size: 1.2rem;
+}
+
+.compact-console .case-result {
+  border-radius: 9px;
+}
+
+.compact-console .case-result summary {
+  padding: 0.75rem;
+}
+
+.compact-console .case-detail {
+  padding: 0 0.75rem 0.75rem;
+}
+
+.compact-console .history-panel {
+  margin-top: 16px;
+}
+
+.compact-console .history-list {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.compact-console .history-button {
+  padding: 0.75rem;
+  background: #fff;
+  border-radius: 9px;
+}
+
+.compact-console .history-report-link {
+  min-height: 34px;
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 7px;
+  font-size: 0.7rem;
+}
+
+.compact-console .explanation {
+  padding: 40px 0 48px;
+}
+
+.compact-console .explanation-grid {
+  gap: 10px;
+  margin-top: 1rem;
+}
+
+.compact-console .explanation article {
+  padding: 0.9rem;
+  border-radius: 10px;
+}
+
+.compact-console footer {
+  padding: 0.9rem 0 1.3rem;
+}
+
+@media (max-width: 880px) {
+  .compact-console .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-console .hero-boundary {
+    max-width: 620px;
+  }
+}
+
+@media (max-width: 600px) {
+  .compact-console .shell {
+    width: min(100% - 24px, 1120px);
+  }
+
+  .compact-console .workflow-nav {
+    top: 0;
+  }
+
+  .compact-console .hero {
+    padding: 32px 0 20px;
+  }
+
+  .compact-console .hero-copy {
+    font-size: 0.84rem;
+  }
+
+  .compact-console .panel {
+    padding: 18px 15px;
+  }
+
+  .compact-console .review-toolbar {
+    position: static;
+  }
+
+  dialog#ai-feedback-dialog {
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+
+  .ai-feedback-shell {
+    height: 100vh;
+    padding: 1rem;
+  }
+
+  .ai-feedback-heading {
+    position: sticky;
+    top: -1rem;
+    z-index: 1;
+    padding-top: 1rem;
+    background: var(--panel);
+  }
+}

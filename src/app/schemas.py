@@ -1,7 +1,8 @@
 from enum import StrEnum
 from datetime import datetime, timezone
 import re
-from typing import Any
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
@@ -101,9 +102,14 @@ class TestRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_run_structure(self):
-        if self.base_url.username or self.base_url.password:
+        parsed_base_url = (
+            urlsplit(self.base_url)
+            if isinstance(self.base_url, str)
+            else self.base_url
+        )
+        if parsed_base_url.username or parsed_base_url.password:
             raise ValueError("base_url credentials are forbidden")
-        if self.base_url.fragment:
+        if parsed_base_url.fragment:
             raise ValueError("base_url fragment is forbidden")
         if len(self.secret_variables) != len(set(self.secret_variables)):
             raise ValueError("secret_variables entries must be unique")
@@ -123,6 +129,17 @@ class TestRunRequest(BaseModel):
                 )
             seen.add(case_id)
         return self
+
+
+class CandidateEvaluationRun(TestRunRequest):
+    cases: list[TestCase] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_existing_run(cls, value):
+        if isinstance(value, TestRunRequest):
+            return value.model_dump(mode="python")
+        return value
 
 
 class AssertionResult(BaseModel):
@@ -303,9 +320,9 @@ class AiProviderStatus(BaseModel):
 
 
 class AiCaseInsight(BaseModel):
-    case_id: str
-    category: str
-    rationale: str
+    case_id: str = Field(pattern=CASE_ID_PATTERN)
+    category: Literal["boundary", "negative", "robustness"]
+    rationale: str = Field(min_length=1, max_length=500)
 
 
 class AiGenerateResponse(BaseModel):
@@ -316,3 +333,60 @@ class AiGenerateResponse(BaseModel):
     requires_human_review: bool = True
     insights: list[AiCaseInsight]
     run: TestRunRequest
+
+
+class AiEvaluationRole(StrEnum):
+    CANDIDATE_EVALUATOR = "candidate_evaluator"
+    DRAFT_EVALUATOR = "draft_evaluator"
+
+
+class AiEvaluationSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class AiEvaluationIssue(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    case_id: str | None = Field(pattern=CASE_ID_PATTERN)
+    severity: AiEvaluationSeverity
+    title: str = Field(min_length=1, max_length=200)
+    detail: str = Field(min_length=1, max_length=500)
+    suggestion: str = Field(min_length=1, max_length=500)
+
+
+class AiCandidateEvaluationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    document: dict[str, Any]
+    candidate_run: CandidateEvaluationRun
+    insights: list[AiCaseInsight] = Field(max_length=10)
+    objective: str = Field(default="", max_length=500)
+
+
+class AiDraftEvaluationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    draft: TestRunRequest
+    document: dict[str, Any] | None = None
+    objective: str = Field(default="", max_length=500)
+
+
+class AiEvaluationResponse(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    role: AiEvaluationRole
+    provider: str = Field(min_length=1, max_length=64)
+    model: str | None = Field(max_length=128)
+    score: int = Field(ge=0, le=100)
+    summary: str = Field(min_length=1, max_length=500)
+    strengths: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        max_length=10
+    )
+    issues: list[AiEvaluationIssue] = Field(max_length=50)
+    recommendations: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        max_length=10
+    )
+    evaluated_case_count: int = Field(ge=0, le=50)
+    requires_human_review: Literal[True]
