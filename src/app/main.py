@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings, target_is_allowed
 from app.schemas import (
+    AiCandidateEvaluationRequest,
+    AiDraftEvaluationRequest,
+    AiEvaluationResponse,
     AiGenerateRequest,
     AiGenerateResponse,
     AiProviderStatus,
@@ -184,6 +187,48 @@ def generate_ai_cases(
         raise HTTPException(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
+        ) from None
+
+
+@app.post(
+    "/api/v1/ai/cases/evaluate",
+    response_model=AiEvaluationResponse,
+    tags=["ai-assistant", "ai-evaluation"],
+)
+def evaluate_ai_candidates(
+    payload: AiCandidateEvaluationRequest,
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiEvaluationResponse:
+    try:
+        return assistant.evaluate_candidates(payload)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": "AI evaluation request failed",
+            },
+        ) from None
+
+
+@app.post(
+    "/api/v1/ai/drafts/evaluate",
+    response_model=AiEvaluationResponse,
+    tags=["ai-assistant", "ai-evaluation"],
+)
+def evaluate_ai_draft(
+    payload: AiDraftEvaluationRequest,
+    assistant: AiAssistantService = Depends(get_ai_assistant),
+) -> AiEvaluationResponse:
+    try:
+        return assistant.evaluate_draft(payload)
+    except AiAssistantError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": "AI evaluation request failed",
+            },
         ) from None
 
 
