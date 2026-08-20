@@ -98,3 +98,108 @@ def test_ai_input_changes_invalidate_stale_candidates() -> None:
         r"\[\s*elements\.aiObjective,\s*elements\.aiMaxCases\s*\]",
         javascript,
     )
+
+
+def test_evaluation_controls_and_dialog_have_accessible_dom_contract() -> None:
+    html = client.get("/").text
+
+    for control_id in ("evaluate-ai-candidates", "evaluate-draft-ai"):
+        assert re.search(
+            rf'<button\b[^>]*\bid=["\']{control_id}["\'][^>]*'
+            r'\btype=["\']button["\']',
+            html,
+        )
+    assert re.search(
+        r'<dialog\b[^>]*\bid=["\']ai-feedback-dialog["\'][^>]*'
+        r'\baria-labelledby=["\']ai-feedback-title["\']',
+        html,
+    )
+    for output_id in (
+        "ai-feedback-title",
+        "ai-feedback-scope",
+        "ai-feedback-status",
+        "ai-feedback-summary",
+        "ai-feedback-score",
+        "ai-feedback-strengths",
+        "ai-feedback-issues",
+        "ai-feedback-recommendations",
+    ):
+        assert re.search(rf'\bid=["\']{output_id}["\']', html)
+
+
+def test_evaluation_uses_same_origin_post_endpoints_and_never_runs_cases() -> None:
+    javascript = javascript_source()
+    candidate = function_block(javascript, "evaluateCandidates")
+    draft = function_block(javascript, "evaluateCurrentDraft")
+
+    for block, endpoint in (
+        (candidate, "/api/v1/ai/cases/evaluate"),
+        (draft, "/api/v1/ai/drafts/evaluate"),
+    ):
+        assert f'fetch("{endpoint}"' in block
+        assert re.search(r"method\s*:\s*[\"']POST[\"']", block)
+        assert 'credentials: "same-origin"' in block
+        assert "validateAiEvaluationResponse(" in block
+        assert "/api/v1/runs" not in block
+        assert "runTests(" not in block
+        assert re.search(r"\bpayload\s*=", block) is None
+
+
+def test_ai_evaluation_response_validator_rejects_contract_boundary_errors() -> None:
+    javascript = javascript_source()
+    validator = function_block(javascript, "validateAiEvaluationResponse")
+    definition = "function validateAiEvaluationResponse(data, role, allowedCaseIds) {" + validator
+    valid = {
+        "role": "candidate_evaluator",
+        "provider": "mock",
+        "model": None,
+        "score": 80,
+        "summary": "Synthetic summary",
+        "strengths": ["clear"],
+        "issues": [{"case_id": "case_1", "severity": "warning", "title": "t", "detail": "d", "suggestion": "s"}],
+        "recommendations": ["review"],
+        "evaluated_case_count": 1,
+        "requires_human_review": True,
+    }
+    variants = {
+        "score_low": {"score": -1},
+        "score_high": {"score": 101},
+        "severity": {"issues": [{"case_id": "case_1", "severity": "critical", "title": "t", "detail": "d", "suggestion": "s"}]},
+        "unknown_case": {"issues": [{"case_id": "unknown", "severity": "info", "title": "t", "detail": "d", "suggestion": "s"}]},
+        "count": {"evaluated_case_count": 2},
+        "role": {"role": "draft_evaluator"},
+        "human_review": {"requires_human_review": False},
+    }
+    program = (
+        '"use strict";\n' + definition + "\n" +
+        f"const valid = {json.dumps(valid)};\nconst variants = {json.dumps(variants)};\n" +
+        "function attempt(value) { try { validateAiEvaluationResponse(value, 'candidate_evaluator', new Set(['case_1'])); return true; } catch (_error) { return false; } }\n" +
+        "process.stdout.write(JSON.stringify({valid: attempt(valid), variants: Object.fromEntries(Object.entries(variants).map(([k, v]) => [k, attempt({...valid, ...v}])))}));\n"
+    )
+    completed = subprocess.run(["node", "-"], input=program, text=True, encoding="utf-8", capture_output=True, check=False, cwd=repository_root)
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["valid"] is True
+    assert all(value is False for value in result["variants"].values())
+
+
+def test_candidate_generation_auto_evaluates_and_keeps_candidates_on_failure() -> None:
+    javascript = javascript_source()
+    generator = function_block(javascript, "generateAiCases")
+    assert re.search(r"evaluateCandidates\s*\(.*manual\s*:\s*false", generator, re.DOTALL)
+    assert "reviewCandidates" in generator
+    assert "evaluateCandidates" in generator
+
+
+def test_feedback_rendering_uses_safe_dom_text_and_stale_draft_is_not_evaluated_per_input() -> None:
+    javascript = javascript_source()
+    render = function_block(javascript, "renderAiFeedback")
+    stale = function_block(javascript, "markDraftEvaluationStale")
+    assert "replaceChildren" in render
+    assert "makeElement(" in render
+    assert "textContent" in render
+    for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "eval("):
+        assert forbidden not in render
+    assert "fetch(" not in stale
+    assert "evaluateCurrentDraft(" not in stale
+    assert "markDraftEvaluationStale(" in javascript

@@ -207,3 +207,47 @@ def test_openapi_input_changes_invalidate_both_candidate_sources() -> None:
 
     assert 'removeReviewSource("openapi")' in invalid_openapi
     assert 'removeReviewSource("ai")' in invalid_ai
+
+
+def test_candidate_review_exposes_manual_candidate_evaluation_and_feedback_dialog() -> None:
+    html = client.get("/").text
+    for control_id in ("evaluate-ai-candidates", "evaluate-draft-ai"):
+        assert re.search(
+            rf'<button\b[^>]*\bid=["\']{control_id}["\'][^>]*'
+            r'\btype=["\']button["\']',
+            html,
+        )
+    assert re.search(
+        r'<dialog\b[^>]*\bid=["\']ai-feedback-dialog["\'][^>]*'
+        r'\baria-labelledby=["\']ai-feedback-title["\']',
+        html,
+    )
+    for output_id in ("ai-feedback-score", "ai-feedback-issues"):
+        assert re.search(rf'\bid=["\']{output_id}["\']', html)
+
+
+def test_candidate_evaluation_failure_does_not_clear_registered_candidates() -> None:
+    javascript = javascript_source()
+    generator = function_block(javascript, "generateAiCases")
+    evaluator = function_block(javascript, "evaluateCandidates")
+    assert re.search(r"evaluateCandidates\s*\(.*manual\s*:\s*false", generator, re.DOTALL)
+    assert "reviewCandidates" in evaluator
+    assert re.search(r"catch\s*\([^)]*\)", evaluator)
+    assert "removeReviewSource" not in evaluator
+
+
+def test_draft_input_handlers_only_mark_feedback_stale_without_fetching() -> None:
+    javascript = javascript_source()
+    draft = function_block(javascript, "evaluateCurrentDraft")
+    assert 'fetch("/api/v1/ai/drafts/evaluate"' in draft
+    assert 'credentials: "same-origin"' in draft
+    assert "validateAiEvaluationResponse(" in draft
+    assert "/api/v1/runs" not in draft
+    assert "runTests(" not in draft
+    assert re.search(
+        r"elements\.(?:jsonEditor|baseUrl)\.addEventListener\(\s*[\"']input[\"']",
+        javascript,
+    )
+    input_bindings = javascript[javascript.index("elements.jsonEditor.addEventListener"):]
+    assert "markDraftEvaluationStale(" in input_bindings
+    assert "fetch(" not in input_bindings.split("restoreDemo();", 1)[0]
