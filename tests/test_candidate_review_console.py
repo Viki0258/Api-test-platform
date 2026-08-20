@@ -236,6 +236,62 @@ def test_candidate_evaluation_failure_does_not_clear_registered_candidates() -> 
     assert "setCandidateEvaluationStatus(" in evaluator
     assert "removeReviewSource" not in evaluator
 
+
+def test_manual_candidate_evaluation_reads_current_review_edits() -> None:
+    javascript = javascript_source()
+    source_builder = function_block(
+        javascript, "readCurrentAiEvaluationSource"
+    )
+    evaluator = function_block(javascript, "evaluateCandidates")
+
+    assert 'candidate.source === "ai"' in source_builder
+    assert "candidateToTestCase(candidate)" in source_builder
+    assert "generatedAiRun" not in source_builder
+    assert (
+        "source = readCurrentAiEvaluationSource()" in evaluator
+    )
+
+    definitions = "\n".join(
+        [
+            "function parseCandidateJson(source, label, candidate) {"
+            + function_block(javascript, "parseCandidateJson"),
+            "function candidateToTestCase(candidate) {"
+            + function_block(javascript, "candidateToTestCase"),
+            "function normalizedBaseUrl(value) {"
+            + function_block(javascript, "normalizedBaseUrl"),
+            "function readCurrentAiEvaluationSource() {" + source_builder,
+        ]
+    )
+    program = (
+        '"use strict";\n'
+        + definitions
+        + "\n"
+        + "let reviewCandidates = [{"
+        + 'source: "ai", baseUrl: "http://127.0.0.1:8000", '
+        + 'caseId: "candidate_1", name: "Edited candidate", method: "POST", '
+        + 'path: "/users/7", queryText: \'{"limit": 1}\', '
+        + 'bodyText: \'{"name": "edited"}\', expectedStatus: "422", '
+        + 'category: "boundary", rationale: "Edited rationale", error: null}];\n'
+        + "const result = readCurrentAiEvaluationSource();\n"
+        + "process.stdout.write(JSON.stringify(result));\n"
+    )
+    completed = subprocess.run(
+        ["node", "-"],
+        input=program,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+        cwd=repository_root,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["run"]["cases"][0]["name"] == "Edited candidate"
+    assert result["run"]["cases"][0]["method"] == "POST"
+    assert result["run"]["cases"][0]["json_body"] == {"name": "edited"}
+    assert result["run"]["cases"][0]["assertions"][0]["expected"] == 422
+    assert result["insights"][0]["rationale"] == "Edited rationale"
+
     evaluator_definition = (
         "async function evaluateCandidates(source, { manual = false } = {}) {"
         + evaluator

@@ -16,6 +16,7 @@ from app.schemas import (
     AiEvaluationResponse,
     AiEvaluationRole,
     AiGenerateRequest,
+    ExtractionRule,
     TestCase,
     TestRunRequest,
 )
@@ -25,6 +26,7 @@ from app.services.ai_assistant import (
     CandidateQueryParameter,
     MockAiProvider,
     OpenAiProvider,
+    ProviderEvaluation,
     ProviderCandidate,
     ProviderOutput,
     _boundary_value,
@@ -167,6 +169,24 @@ def test_openai_status_is_available_without_key_and_generation_is_blocked() -> N
     assert status.json()["network_access"] is True
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "AI_PROVIDER_NOT_CONFIGURED"
+
+
+def test_unconfigured_provider_validates_generation_source_before_provider_status() -> None:
+    service = AiAssistantService(Settings(ai_provider="openai"))
+
+    with pytest.raises(AiAssistantError) as invalid_document:
+        service.generate(
+            AiGenerateRequest(document={"openapi": "2.0", "paths": {}})
+        )
+    assert invalid_document.value.code == "INVALID_AI_SOURCE_DOCUMENT"
+    assert invalid_document.value.status_code == 422
+
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    with pytest.raises(AiAssistantError) as oversized:
+        service.generate(AiGenerateRequest(document=oversized_document))
+    assert oversized.value.code == "AI_SOURCE_DOCUMENT_TOO_LARGE"
+    assert oversized.value.status_code == 422
 
 
 def test_openai_provider_uses_structured_responses_without_storing_input() -> None:
@@ -641,6 +661,7 @@ def test_evaluation_response_enforces_strict_contract_bounds() -> None:
     base = {
         "role": "candidate_evaluator",
         "provider": "mock",
+        "model": None,
         "score": 50,
         "summary": "Synthetic summary",
         "strengths": [],
@@ -758,16 +779,12 @@ def test_evaluation_case_count_boundaries_are_enforced() -> None:
         service.evaluate_candidates(candidate_request).evaluated_case_count == 10
     )
 
-    with pytest.raises(AiAssistantError) as too_many:
-        service.evaluate_candidates(
-            AiCandidateEvaluationRequest(
-                document=ai_document(),
-                candidate_run=generated_candidate_run(count=11),
-                insights=[],
-            )
+    with pytest.raises(ValueError):
+        AiCandidateEvaluationRequest(
+            document=ai_document(),
+            candidate_run=generated_candidate_run(count=11),
+            insights=[],
         )
-    assert too_many.value.code == "INVALID_AI_EVALUATION_INPUT"
-    assert too_many.value.status_code == 422
 
     draft = service.evaluate_draft(
         AiDraftEvaluationRequest(draft=generated_candidate_run(count=50))
@@ -1046,3 +1063,175 @@ def test_openai_evaluation_maps_unavailable_and_invalid_output() -> None:
     assert invalid_error.value.code == "AI_PROVIDER_INVALID_OUTPUT"
     assert invalid_error.value.status_code == 502
     assert "error-source-secret" not in str(invalid_error.value)
+
+
+def test_provider_bound_evaluation_text_is_sanitized_by_field() -> None:
+    captured: dict[str, object] = {}
+
+    class CaptureProvider:
+        name = "synthetic-provider"
+        model = "synthetic-model"
+
+        def evaluate(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "role": "candidate_evaluator",
+                "provider": self.name,
+                "model": self.model,
+                "score": 50,
+                "summary": "Synthetic evaluation",
+                "strengths": [],
+                "issues": [],
+                "recommendations": [],
+                "evaluated_case_count": 1,
+                "requires_human_review": True,
+            }
+
+    source_document = ai_document()
+    operation_data = source_document["paths"]["/users/{user_id}"]["get"]
+    operation_data["summary"] = "Bearer openapi-summary-sentinel"
+    operation_data["operationId"] = "https://operation-id-sentinel.example.test"
+    operation_data["parameters"][0]["schema"][
+        "type"
+    ] = "https://schema-type-sentinel.example.test"
+    operation_data["parameters"][1]["schema"]["type"] = (
+        "api_token=schema-credential-sentinel"
+    )
+
+    candidate_run = generated_candidate_run()
+    candidate_run.cases[0].name = "Bearer case-name-sentinel"
+    candidate_run.cases[0].path = "/users/https://case-path-sentinel.example.test"
+    candidate_run.cases[0].assertions[0].path = (
+        "https://assertion-path-sentinel.example.test"
+    )
+    candidate_run.cases[0].extract = [
+        ExtractionRule(name="user_id", path="Bearer extract-path-sentinel")
+    ]
+    request = AiCandidateEvaluationRequest(
+        document=source_document,
+        candidate_run=candidate_run,
+        insights=[
+            AiCaseInsight(
+                case_id="candidate_1",
+                category="boundary",
+                rationale="Bearer insight-rationale-sentinel",
+            )
+        ],
+        objective="https://objective-sentinel.example.test",
+    )
+
+    AiAssistantService(Settings(), provider=CaptureProvider()).evaluate_candidates(
+        request
+    )
+
+    serialized_input = json.dumps(
+        captured["evaluation_input"], ensure_ascii=False
+    )
+    for sentinel in (
+        "openapi-summary-sentinel",
+        "operation-id-sentinel",
+        "schema-type-sentinel",
+        "schema-credential-sentinel",
+        "case-name-sentinel",
+        "case-path-sentinel",
+        "assertion-path-sentinel",
+        "extract-path-sentinel",
+        "insight-rationale-sentinel",
+    ):
+        assert sentinel not in serialized_input
+    assert "objective-sentinel" not in str(captured["objective"])
+
+
+def test_safe_schema_omits_untrusted_schema_type_values() -> None:
+    schema = _safe_schema(
+        {
+            "type": "https://schema-type-sentinel.example.test",
+            "properties": {
+                "safe": {"type": "string"},
+                "credential": {"type": "api_token=schema-credential-sentinel"},
+            },
+        },
+        depth=0,
+    )
+
+    assert schema is not None
+    assert schema.get("type") in {None, "unknown"}
+    serialized = json.dumps(schema, ensure_ascii=False)
+    assert "schema-type-sentinel" not in serialized
+    assert "schema-credential-sentinel" not in serialized
+
+
+def test_openai_evaluation_schema_has_required_nullable_fields_recursively() -> None:
+    schema = ProviderEvaluation.model_json_schema()
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert "default" not in value
+            if value.get("type") == "object":
+                properties = value.get("properties", {})
+                assert value.get("additionalProperties") is False
+                assert set(value.get("required", [])) == set(properties)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(schema)
+    issue_schema = schema["$defs"]["AiEvaluationIssue"]
+    response_properties = schema["properties"]
+    assert "case_id" in issue_schema["required"]
+    assert "model" in schema["required"]
+    assert "requires_human_review" in schema["required"]
+    assert response_properties["model"]["anyOf"][-1] == {"type": "null"}
+    assert response_properties["requires_human_review"]["const"] is True
+
+
+def test_unconfigured_provider_validates_evaluation_input_before_provider_status() -> None:
+    service = AiAssistantService(Settings(ai_provider="openai"))
+
+    with pytest.raises(AiAssistantError) as invalid_document:
+        service.evaluate_candidates(
+            AiCandidateEvaluationRequest(
+                document={"openapi": "2.0", "paths": {}},
+                candidate_run=generated_candidate_run(),
+                insights=[],
+            )
+        )
+    assert invalid_document.value.code == "INVALID_AI_EVALUATION_INPUT"
+    assert invalid_document.value.status_code == 422
+
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    with pytest.raises(AiAssistantError) as oversized:
+        service.evaluate_candidates(
+            AiCandidateEvaluationRequest(
+                document=oversized_document,
+                candidate_run=generated_candidate_run(),
+                insights=[],
+            )
+        )
+    assert oversized.value.code == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert oversized.value.status_code == 422
+
+
+def test_evaluation_response_text_items_have_non_empty_bounded_lengths() -> None:
+    base = {
+        "role": "candidate_evaluator",
+        "provider": "mock",
+        "model": None,
+        "score": 50,
+        "summary": "Synthetic summary",
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "evaluated_case_count": 1,
+        "requires_human_review": True,
+    }
+
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "strengths": [""]})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "recommendations": ["x" * 501]}
+        )

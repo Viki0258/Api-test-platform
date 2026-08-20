@@ -224,3 +224,22 @@ def test_evaluation_endpoints_are_exposed_with_frozen_tags(path: str) -> None:
         for code in (codes,) if isinstance(codes, str) else codes:
             assert code in serialized
         assert "sentinel" not in serialized.lower()
+
+
+def test_evaluation_openapi_schema_exposes_role_specific_limits() -> None:
+    schemas = app.openapi()["components"]["schemas"]
+    candidate_request = schemas["AiCandidateEvaluationRequest"]
+    candidate_run_ref = candidate_request["properties"]["candidate_run"]["$ref"]
+    candidate_run = schemas[candidate_run_ref.rsplit("/", 1)[-1]]
+    insight_ref = candidate_request["properties"]["insights"]["items"]["$ref"]
+    insight = schemas[insight_ref.rsplit("/", 1)[-1]]
+
+    assert candidate_run["properties"]["cases"]["maxItems"] == 10
+    assert candidate_request["properties"]["insights"]["maxItems"] == 10
+    assert insight["properties"]["category"]["enum"] == [
+        "boundary",
+        "negative",
+        "robustness",
+    ]
+    assert insight["properties"]["rationale"]["minLength"] == 1
+    assert insight["properties"]["rationale"]["maxLength"] == 500

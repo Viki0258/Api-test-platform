@@ -1,7 +1,7 @@
 from enum import StrEnum
 from datetime import datetime, timezone
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -129,6 +129,17 @@ class TestRunRequest(BaseModel):
                 )
             seen.add(case_id)
         return self
+
+
+class CandidateEvaluationRun(TestRunRequest):
+    cases: list[TestCase] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_existing_run(cls, value):
+        if isinstance(value, TestRunRequest):
+            return value.model_dump(mode="python")
+        return value
 
 
 class AssertionResult(BaseModel):
@@ -309,9 +320,9 @@ class AiProviderStatus(BaseModel):
 
 
 class AiCaseInsight(BaseModel):
-    case_id: str
-    category: str
-    rationale: str
+    case_id: str = Field(pattern=CASE_ID_PATTERN)
+    category: Literal["boundary", "negative", "robustness"]
+    rationale: str = Field(min_length=1, max_length=500)
 
 
 class AiGenerateResponse(BaseModel):
@@ -338,7 +349,7 @@ class AiEvaluationSeverity(StrEnum):
 class AiEvaluationIssue(BaseModel):
     model_config = {"extra": "forbid"}
 
-    case_id: str | None = Field(default=None, pattern=CASE_ID_PATTERN)
+    case_id: str | None = Field(pattern=CASE_ID_PATTERN)
     severity: AiEvaluationSeverity
     title: str = Field(min_length=1, max_length=200)
     detail: str = Field(min_length=1, max_length=500)
@@ -349,7 +360,7 @@ class AiCandidateEvaluationRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     document: dict[str, Any]
-    candidate_run: TestRunRequest
+    candidate_run: CandidateEvaluationRun
     insights: list[AiCaseInsight] = Field(max_length=10)
     objective: str = Field(default="", max_length=500)
 
@@ -367,11 +378,15 @@ class AiEvaluationResponse(BaseModel):
 
     role: AiEvaluationRole
     provider: str = Field(min_length=1, max_length=64)
-    model: str | None = Field(default=None, max_length=128)
+    model: str | None = Field(max_length=128)
     score: int = Field(ge=0, le=100)
     summary: str = Field(min_length=1, max_length=500)
-    strengths: list[str] = Field(max_length=10)
+    strengths: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        max_length=10
+    )
     issues: list[AiEvaluationIssue] = Field(max_length=50)
-    recommendations: list[str] = Field(max_length=10)
+    recommendations: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        max_length=10
+    )
     evaluated_case_count: int = Field(ge=0, le=50)
-    requires_human_review: Literal[True] = True
+    requires_human_review: Literal[True]

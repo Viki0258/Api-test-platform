@@ -187,6 +187,34 @@ def test_ai_evaluation_response_validator_rejects_contract_boundary_errors() -> 
     assert all(value is False for value in result["variants"].values())
 
 
+def test_ai_evaluation_validator_counts_unicode_code_points() -> None:
+    javascript = javascript_source()
+    validator = function_block(javascript, "validateAiEvaluationResponse")
+    definition = "function validateAiEvaluationResponse(data, role, allowedCaseIds) {" + validator
+    program = (
+        '"use strict";\n'
+        + definition
+        + "\n"
+        + "const value = {"
+        + 'role: "candidate_evaluator", provider: "mock", model: null, '
+        + 'score: 80, summary: "😀".repeat(500), strengths: [], issues: [], '
+        + 'recommendations: [], evaluated_case_count: 1, requires_human_review: true};\n'
+        + "validateAiEvaluationResponse(value, 'candidate_evaluator', new Set(['case_1']));\n"
+        + 'process.stdout.write("accepted");\n'
+    )
+    completed = subprocess.run(
+        ["node", "-"],
+        input=program,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+        cwd=repository_root,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "accepted"
+
+
 def test_candidate_generation_auto_evaluates_and_keeps_candidates_on_failure() -> None:
     javascript = javascript_source()
     generator = function_block(javascript, "generateAiCases")
@@ -206,3 +234,55 @@ def test_feedback_rendering_uses_safe_dom_text_and_stale_draft_is_not_evaluated_
     assert "fetch(" not in stale
     assert "evaluateCurrentDraft(" not in stale
     assert "markDraftEvaluationStale(" in javascript
+
+
+def test_feedback_window_can_reopen_switch_and_show_stale_timestamp() -> None:
+    javascript = javascript_source()
+    html = client.get("/").text
+
+    for control_id in (
+        "view-ai-candidate-feedback",
+        "view-draft-ai-feedback",
+        "show-candidate-ai-feedback",
+        "show-draft-ai-feedback",
+    ):
+        assert re.search(
+            rf'<button\b[^>]*\bid=["\']{control_id}["\'][^>]*'
+            r'\btype=["\']button["\']',
+            html,
+        )
+    for output_id in ("ai-feedback-time", "ai-feedback-stale"):
+        assert re.search(rf'\bid=["\']{output_id}["\']', html)
+
+    assert "latestAiFeedback" in javascript
+    assert "openLatestAiFeedback" in javascript
+    assert "evaluatedAt: new Date().toISOString()" in javascript
+    stale = function_block(javascript, "markDraftEvaluationStale")
+    assert "draftEvaluationRequestSequence += 1" in stale
+    assert "setDraftEvaluationLoading(false)" in stale
+    assert "renderAiFeedback(" in stale
+
+
+def test_editing_candidate_marks_candidate_feedback_stale() -> None:
+    javascript = javascript_source()
+    update = function_block(javascript, "updateCandidateValue")
+    stale = function_block(javascript, "markCandidateEvaluationStale")
+    render = function_block(javascript, "renderAiFeedback")
+
+    assert "markCandidateEvaluationStale" in update
+    assert re.search(r'candidate\.source\s*===\s*["\']ai["\']', update)
+    assert "candidateEvaluationRequestSequence += 1" in stale
+    assert "candidateEvaluationIsStale = true" in stale
+    assert "candidate_evaluation" in render
+
+
+def test_programmatic_openapi_updates_invalidate_draft_evaluation() -> None:
+    javascript = javascript_source()
+    setter = function_block(javascript, "setOpenApiEditorValue")
+    demo = function_block(javascript, "loadOpenApiDemo")
+    file_handler = function_block(javascript, "handleOpenApiFile")
+
+    assert "elements.openApiEditor.value = value" in setter
+    assert "markDraftEvaluationStale" in setter
+    assert "setOpenApiEditorValue(" in demo
+    assert "setOpenApiEditorValue(" in file_handler

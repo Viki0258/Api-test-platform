@@ -41,12 +41,23 @@ MAX_SCHEMA_DEPTH = 5
 MAX_CASE_BYTES = 65_536
 MAX_CANDIDATE_EVALUATION_CASES = 10
 SUPPORTED_METHODS = ("get", "post", "put", "patch", "delete")
+SAFE_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
 SENSITIVE_FIELD_PATTERN = re.compile(
     r"(?:authorization|api[-_]?key|token|secret|password|cookie|session)",
     re.IGNORECASE,
 )
 CREDENTIAL_VALUE_PATTERN = re.compile(
     r"(?:bearer\s+\S+|(?:api[-_]?key|token|secret|password|authorization|cookie)\s*(?:=|:)\s*\S+)",
+    re.IGNORECASE,
+)
+ABSOLUTE_URL_PATTERN = re.compile(
+    r"\b(?:https?|wss?)://[^\s<>'\"`]+",
+    re.IGNORECASE,
+)
+PROVIDER_SENSITIVE_TEXT_PATTERN = re.compile(
+    r"(?:authorization|api[-_ ]?key|token|secret|password|cookie|session|bearer)\b",
     re.IGNORECASE,
 )
 
@@ -230,6 +241,7 @@ class MockAiProvider:
             )
             issues = [
                 AiEvaluationIssue(
+                    case_id=None,
                     severity=AiEvaluationSeverity.WARNING,
                     title="Candidate category coverage is incomplete",
                     detail="The candidate set does not cover every advisory category.",
@@ -246,6 +258,7 @@ class MockAiProvider:
                 issues=issues,
                 recommendations=["Review all candidates before adding them to a draft."],
                 evaluated_case_count=len(cases),
+                requires_human_review=True,
             )
 
         executable = sum(
@@ -257,6 +270,7 @@ class MockAiProvider:
         if executable != len(cases):
             issues.append(
                 AiEvaluationIssue(
+                    case_id=None,
                     severity=AiEvaluationSeverity.WARNING,
                     title="Some draft cases have no assertion metadata",
                     detail="A draft case without assertions cannot provide a useful result.",
@@ -273,6 +287,7 @@ class MockAiProvider:
             issues=issues,
             recommendations=["Review the draft before manually running it."],
             evaluated_case_count=len(cases),
+            requires_human_review=True,
         )
 
 
@@ -299,21 +314,12 @@ class OpenAiProvider:
         objective: str,
         max_cases: int,
     ) -> ProviderOutput:
-        prompt = json.dumps(
-            {
-                "objective": objective,
-                "max_cases": max_cases,
-                "api_structure": outline,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
+        prompt = _generation_prompt(
+            objective=objective,
+            outline=outline,
+            max_cases=max_cases,
         )
-        if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
-            raise AiAssistantError(
-                "AI_SOURCE_DOCUMENT_TOO_LARGE",
-                "sanitized API structure exceeds the AI prompt limit",
-                status_code=422,
-            )
+        _validate_generation_prompt_size(prompt)
 
         body = {
             "model": self.model,
@@ -460,17 +466,24 @@ class AiAssistantService:
         )
 
     def generate(self, request: AiGenerateRequest) -> AiGenerateResponse:
+        baseline = _baseline_run(request)
+        outline = build_safe_outline(request.document)
+        _validate_generation_prompt_size(
+            _generation_prompt(
+                objective=request.objective,
+                outline=outline,
+                max_cases=request.max_cases,
+            )
+        )
         if self._provider is None:
             raise AiAssistantError(
                 "AI_PROVIDER_NOT_CONFIGURED",
                 "OpenAI provider requires OPENAI_API_KEY",
                 status_code=503,
             )
-        baseline = _baseline_run(request)
-        outline = build_safe_outline(request.document)
         provider_output = self._provider.generate(
             outline=outline,
-            objective=request.objective,
+            objective=_sanitize_provider_text(request.objective, 500) or "",
             max_cases=request.max_cases,
         )
         cases, insights, warnings = _validate_candidates(
@@ -526,12 +539,6 @@ class AiAssistantService:
         objective: str,
         max_cases: int,
     ) -> AiEvaluationResponse:
-        if self._provider is None:
-            raise AiAssistantError(
-                "AI_PROVIDER_NOT_CONFIGURED",
-                "OpenAI provider requires OPENAI_API_KEY",
-                status_code=503,
-            )
         if len(run.cases) > max_cases:
             raise _invalid_evaluation_input("evaluation case count exceeds its limit")
 
@@ -546,10 +553,16 @@ class AiAssistantService:
         )
         _validate_evaluation_prompt_size(
             _evaluation_prompt(
-                objective=objective,
+                objective=_sanitize_provider_text(objective, 500) or "",
                 evaluation_input=evaluation_input,
             )
         )
+        if self._provider is None:
+            raise AiAssistantError(
+                "AI_PROVIDER_NOT_CONFIGURED",
+                "OpenAI provider requires OPENAI_API_KEY",
+                status_code=503,
+            )
         evaluator = getattr(self._provider, "evaluate", None)
         if not callable(evaluator):
             raise _invalid_output()
@@ -558,7 +571,7 @@ class AiAssistantService:
                 evaluator(
                     role=role,
                     evaluation_input=evaluation_input,
-                    objective=objective,
+                    objective=_sanitize_provider_text(objective, 500) or "",
                 )
             )
         except AiAssistantError:
@@ -595,24 +608,7 @@ class AiAssistantService:
 
 
 def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
-    try:
-        serialized = json.dumps(
-            document,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError):
-        raise AiAssistantError(
-            "INVALID_AI_SOURCE_DOCUMENT",
-            "OpenAPI document must be JSON serializable",
-            status_code=422,
-        ) from None
-    if len(serialized) > MAX_DOCUMENT_BYTES:
-        raise AiAssistantError(
-            "AI_SOURCE_DOCUMENT_TOO_LARGE",
-            "OpenAPI document exceeds the 1 MiB limit",
-            status_code=422,
-        )
+    _validate_source_document_size(document)
 
     version = document.get("openapi")
     if not isinstance(version, str) or not re.fullmatch(r"3\.(?:0|1)\.\d+", version):
@@ -641,6 +637,9 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
             path_item, dict
         ):
             continue
+        safe_path = _sanitize_provider_text(path, 2048, fallback=None)
+        if safe_path is None:
+            continue
         inherited = path_item.get("parameters", [])
         for method in SUPPORTED_METHODS:
             operation = path_item.get(method)
@@ -651,7 +650,7 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
             operations.append(
                 {
                     "method": method.upper(),
-                    "path": path[:2048],
+                    "path": safe_path,
                     "operation_id": _safe_text(operation.get("operationId"), 120),
                     "summary": _safe_text(operation.get("summary"), 200),
                     "parameters": parameters,
@@ -683,6 +682,29 @@ def build_safe_outline(document: dict[str, Any]) -> dict[str, Any]:
             status_code=422,
         )
     return outline
+
+
+def _validate_source_document_size(document: dict[str, Any]) -> None:
+    try:
+        serialized_size = len(
+            json.dumps(
+                document,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    except (TypeError, ValueError):
+        raise AiAssistantError(
+            "INVALID_AI_SOURCE_DOCUMENT",
+            "OpenAPI document must be JSON serializable",
+            status_code=422,
+        ) from None
+    if serialized_size > MAX_DOCUMENT_BYTES:
+        raise AiAssistantError(
+            "AI_SOURCE_DOCUMENT_TOO_LARGE",
+            "OpenAPI document exceeds the 1 MiB limit",
+            status_code=422,
+        )
 
 
 def _provider_from_settings(settings: Settings) -> AiProvider:
@@ -727,7 +749,8 @@ def _build_evaluation_input(
             {
                 "case_id": insight.case_id,
                 "category": insight.category,
-                "rationale": insight.rationale,
+                "rationale": _sanitize_provider_text(insight.rationale, 500)
+                or "[redacted-rationale]",
             }
             for insight in insights
         ]
@@ -740,28 +763,49 @@ def _safe_evaluation_cases(
 ) -> list[dict[str, Any]]:
     safe_cases: list[dict[str, Any]] = []
     for index, case in enumerate(run.cases, start=1):
-        item: dict[str, Any] = {
-            "id": case.id or f"case_{index}",
-            "name": case.name,
-            "method": case.method.value,
-            "path": case.path,
-            "query": [
+        safe_query: list[dict[str, Any]] = []
+        for name, value in case.query.items():
+            safe_name = _sanitize_provider_text(name, 120, fallback=None)
+            if safe_name is None:
+                continue
+            safe_query.append(
                 {
-                    "name": name[:120],
+                    "name": safe_name,
                     "value_shape": _safe_value_shape(value, depth=0),
                 }
-                for name, value in case.query.items()
-                if isinstance(name, str) and not SENSITIVE_FIELD_PATTERN.search(name)
-            ][:50],
+            )
+
+        safe_extract: list[dict[str, str]] = []
+        for rule in case.extract:
+            if rule.secret:
+                continue
+            safe_name = _sanitize_provider_text(rule.name, 120, fallback=None)
+            safe_path = _sanitize_provider_text(rule.path, 256, fallback=None)
+            if safe_name is None or safe_path is None:
+                continue
+            safe_extract.append({"name": safe_name, "path": safe_path})
+
+        safe_dependencies = [
+            safe_dependency
+            for dependency in case.depends_on
+            if (
+                safe_dependency := _sanitize_provider_text(
+                    dependency, 64, fallback=None
+                )
+            )
+            is not None
+        ][:50]
+        item: dict[str, Any] = {
+            "id": case.id or f"case_{index}",
+            "name": _sanitize_provider_text(case.name, 120)
+            or "[unnamed-case]",
+            "method": case.method.value,
+            "path": _sanitize_provider_text(case.path, 2048)
+            or "[redacted-path]",
+            "query": safe_query[:50],
             "assertions": _safe_evaluation_assertions(case, role),
-            "depends_on": list(case.depends_on)[:50],
-            "extract": [
-                {"name": rule.name, "path": rule.path}
-                for rule in case.extract
-                if not rule.secret
-                and not SENSITIVE_FIELD_PATTERN.search(rule.name)
-                and not SENSITIVE_FIELD_PATTERN.search(rule.path)
-            ][:50],
+            "depends_on": safe_dependencies,
+            "extract": safe_extract[:50],
         }
         if role is AiEvaluationRole.DRAFT_EVALUATOR:
             item["json_body_shape"] = _safe_value_shape(case.json_body, depth=0)
@@ -776,8 +820,13 @@ def _safe_evaluation_assertions(
     assertions: list[dict[str, Any]] = []
     for assertion in case.assertions[:50]:
         item: dict[str, Any] = {"type": assertion.type.value}
-        if assertion.path and not SENSITIVE_FIELD_PATTERN.search(assertion.path):
-            item["path"] = assertion.path[:256]
+        safe_path = (
+            _sanitize_provider_text(assertion.path, 256, fallback=None)
+            if assertion.path
+            else None
+        )
+        if safe_path is not None:
+            item["path"] = safe_path
         if (
             role is AiEvaluationRole.CANDIDATE_EVALUATOR
             and assertion.type is AssertionType.STATUS_CODE
@@ -811,23 +860,53 @@ def _safe_value_shape(value: Any, *, depth: int) -> dict[str, Any]:
             ],
         }
     if isinstance(value, dict):
+        safe_properties: dict[str, dict[str, Any]] = {}
+        for key, item in list(value.items())[:50]:
+            safe_key = _sanitize_provider_text(str(key), 120, fallback=None)
+            if safe_key is not None:
+                safe_properties[safe_key] = _safe_value_shape(item, depth=depth + 1)
         return {
             "type": "object",
-            "properties": {
-                str(key)[:120]: _safe_value_shape(item, depth=depth + 1)
-                for key, item in list(value.items())[:50]
-                if not SENSITIVE_FIELD_PATTERN.search(str(key))
-            },
+            "properties": safe_properties,
         }
     return {"type": "unknown"}
 
 
 def _evaluation_prompt(*, objective: str, evaluation_input: dict[str, Any]) -> str:
     return json.dumps(
-        {"objective": objective, "evaluation": evaluation_input},
+        {
+            "objective": _sanitize_provider_text(objective, 500) or "",
+            "evaluation": evaluation_input,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _generation_prompt(
+    *,
+    objective: str,
+    outline: dict[str, Any],
+    max_cases: int,
+) -> str:
+    return json.dumps(
+        {
+            "objective": _sanitize_provider_text(objective, 500) or "",
+            "max_cases": max_cases,
+            "api_structure": outline,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _validate_generation_prompt_size(prompt: str) -> None:
+    if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
+        raise AiAssistantError(
+            "AI_SOURCE_DOCUMENT_TOO_LARGE",
+            "sanitized API structure exceeds the AI prompt limit",
+            status_code=422,
+        )
 
 
 def _validate_evaluation_prompt_size(prompt: str) -> None:
@@ -925,6 +1004,7 @@ def _invalid_evaluation_input(message: str) -> AiAssistantError:
 
 
 def _baseline_run(request: AiGenerateRequest) -> TestRunRequest:
+    _validate_source_document_size(request.document)
     try:
         generated = generate_openapi_cases(
             OpenApiGenerateRequest(
@@ -1042,14 +1122,18 @@ def _safe_parameters(inherited: Any, operation_parameters: Any) -> list[dict[str
                 continue
             name = parameter.get("name")
             location = parameter.get("in")
+            safe_name = (
+                _sanitize_provider_text(name, 120, fallback=None)
+                if isinstance(name, str)
+                else None
+            )
             if (
-                not isinstance(name, str)
+                safe_name is None
                 or location not in {"path", "query"}
-                or SENSITIVE_FIELD_PATTERN.search(name)
             ):
                 continue
             combined[(name, location)] = {
-                "name": name[:120],
+                "name": safe_name,
                 "in": location,
                 "required": bool(parameter.get("required")),
                 "schema": _safe_schema(parameter.get("schema"), depth=0),
@@ -1065,7 +1149,9 @@ def _safe_schema(value: Any, *, depth: int) -> dict[str, Any] | None:
     result: dict[str, Any] = {}
     schema_type = value.get("type")
     if isinstance(schema_type, str):
-        result["type"] = schema_type[:30]
+        result["type"] = (
+            schema_type if schema_type in SAFE_SCHEMA_TYPES else "unknown"
+        )
     for key in (
         "format",
         "minimum",
@@ -1079,24 +1165,37 @@ def _safe_schema(value: Any, *, depth: int) -> dict[str, Any] | None:
         "pattern",
     ):
         item = value.get(key)
-        if isinstance(item, (str, int, float, bool)):
+        if isinstance(item, str):
+            safe_item = _sanitize_provider_text(item, 256, fallback=None)
+            if safe_item is not None:
+                result[key] = safe_item
+        elif isinstance(item, (int, float, bool)):
             result[key] = item
     if isinstance(value.get("enum"), list):
         result["enum_count"] = len(value["enum"])
     required = value.get("required")
     if isinstance(required, list):
         result["required"] = [
-            item[:120]
+            safe_item
             for item in required
-            if isinstance(item, str) and not SENSITIVE_FIELD_PATTERN.search(item)
+            if (
+                isinstance(item, str)
+                and (safe_item := _sanitize_provider_text(item, 120, fallback=None))
+                is not None
+            )
         ][:50]
     properties = value.get("properties")
     if isinstance(properties, dict):
         safe_properties = {}
         for name, child in list(properties.items())[:50]:
-            if not isinstance(name, str) or SENSITIVE_FIELD_PATTERN.search(name):
+            safe_name = (
+                _sanitize_provider_text(name, 120, fallback=None)
+                if isinstance(name, str)
+                else None
+            )
+            if safe_name is None:
                 continue
-            safe_properties[name[:120]] = _safe_schema(child, depth=depth + 1)
+            safe_properties[safe_name] = _safe_schema(child, depth=depth + 1)
         result["properties"] = safe_properties
     if "items" in value:
         result["items"] = _safe_schema(value.get("items"), depth=depth + 1)
@@ -1116,17 +1215,41 @@ def _request_body_schema(request_body: Any) -> Any:
 def _response_statuses(responses: Any) -> list[str]:
     if not isinstance(responses, dict):
         return []
-    return [
-        str(status)[:16]
-        for status in responses
-        if isinstance(status, (str, int))
-    ][:30]
+    safe_statuses: list[str] = []
+    for status in responses:
+        if not isinstance(status, (str, int)):
+            continue
+        safe_status = _sanitize_provider_text(str(status), 16, fallback=None)
+        if safe_status is None or not (
+            safe_status == "default" or safe_status.isdigit()
+        ):
+            continue
+        safe_statuses.append(safe_status)
+    return safe_statuses[:30]
 
 
 def _safe_text(value: Any, limit: int) -> str | None:
+    return _sanitize_provider_text(value, limit)
+
+
+def _sanitize_provider_text(
+    value: Any,
+    limit: int,
+    *,
+    fallback: str | None = "[redacted]",
+) -> str | None:
     if not isinstance(value, str):
         return None
-    return value[:limit]
+    normalized = value.replace("\x00", " ").strip()
+    if not normalized:
+        return ""
+    if (
+        ABSOLUTE_URL_PATTERN.search(normalized)
+        or CREDENTIAL_VALUE_PATTERN.search(normalized)
+        or PROVIDER_SENSITIVE_TEXT_PATTERN.search(normalized)
+    ):
+        return fallback
+    return normalized[:limit]
 
 
 def _matching_template(

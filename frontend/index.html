@@ -301,6 +301,14 @@
                 重新评测候选
               </button>
             </div>
+            <button
+              id="view-ai-candidate-feedback"
+              class="button button-secondary"
+              type="button"
+              disabled
+            >
+              查看最新候选反馈
+            </button>
             <div
               id="ai-status"
               class="status-message"
@@ -449,6 +457,14 @@
             <button id="evaluate-draft-ai" class="button button-secondary" type="button">
               评测当前草稿
             </button>
+            <button
+              id="view-draft-ai-feedback"
+              class="button button-secondary"
+              type="button"
+              disabled
+            >
+              查看最新草稿反馈
+            </button>
             <button id="run-tests" class="button button-primary" type="button">
               <span class="button-label">运行测试</span>
               <span class="button-spinner" aria-hidden="true"></span>
@@ -580,7 +596,27 @@
           </div>
           <button id="close-ai-feedback" class="button button-secondary" type="button">关闭</button>
         </div>
+        <div class="ai-feedback-switcher" role="group" aria-label="Switch AI feedback">
+          <button
+            id="show-candidate-ai-feedback"
+            class="button button-secondary"
+            type="button"
+            disabled
+          >
+            候选反馈
+          </button>
+          <button
+            id="show-draft-ai-feedback"
+            class="button button-secondary"
+            type="button"
+            disabled
+          >
+            草稿反馈
+          </button>
+        </div>
         <p id="ai-feedback-status" class="status-message" role="status" aria-live="polite"></p>
+        <p id="ai-feedback-stale" class="status-message status-error" role="status" aria-live="polite" hidden></p>
+        <p id="ai-feedback-time" class="field-help"></p>
         <p id="ai-feedback-summary"></p>
         <p id="ai-feedback-score"></p>
         <section aria-labelledby="ai-feedback-strengths-title">

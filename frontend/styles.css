@@ -1907,6 +1907,26 @@ dialog#ai-feedback-dialog::backdrop {
   margin: 0 0 0.25rem;
 }
 
+.ai-feedback-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-feedback-switcher .button {
+  font-size: 0.75rem;
+}
+
+#ai-feedback-stale {
+  margin: 0.8rem 0 0;
+}
+
+#ai-feedback-time {
+  margin: 0.6rem 0 0;
+}
+
 #ai-feedback-status,
 #ai-feedback-summary,
 #ai-feedback-score {

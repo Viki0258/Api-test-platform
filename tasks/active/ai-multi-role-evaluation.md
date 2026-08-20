@@ -77,9 +77,9 @@
 | 检查 | 命令或方法 | 结果 | 证据/备注 |
 |---|---|---|---|
 | 设计输入检查 | 读取现有 AI、候选审核和配置实现 | 通过 | 现有生成接口为 `/api/v1/ai/cases/generate`，默认 Provider 为 Mock |
-| 后端与契约测试 | `.venv\Scripts\python.exe -m pytest --cov=app` | 通过 | 312 passed，覆盖率 92% |
-| 前端语法与契约测试 | `node --check frontend/app.js`；console pytest | 通过 | `test_ai_console.py`、`test_candidate_review_console.py`、OpenAPI/visual console 测试通过 |
-| 安全与工作区检查 | `scripts\validate_workspace.py`；`git diff --check`；敏感 API/HTML 注入扫描 | 通过 | 无新增密钥、无反馈窗口 HTML 注入，评测路径不调用运行接口 |
+| 后端与契约测试 | `.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing` | 通过 | 322 passed，覆盖率 91% |
+| 前端语法与契约测试 | `node --check frontend/app.js`；全量 pytest | 通过 | Unicode 边界、程序化 OpenAPI 写入失效、反馈窗口和 API 契约回归通过 |
+| 安全与工作区检查 | `scripts\validate_workspace.py`；`git diff --check`；敏感 API/HTML 注入扫描 | 通过 | 无新增密钥；Provider 输入 schema type 使用白名单；反馈窗口无 HTML 注入，评测路径不调用运行接口 |
 
 ## 最终结果
 
