@@ -92,6 +92,35 @@ def test_evaluation_rejects_invalid_input_without_echoing_source(
     assert "synthetic-secret-never-send" not in response.text
 
 
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/api/v1/ai/cases/evaluate",
+            {
+                "candidate_run": candidate_payload()["candidate_run"],
+                "sentinel": "malformed-candidate-request-sentinel",
+            },
+        ),
+        (
+            "/api/v1/ai/drafts/evaluate",
+            {
+                "draft": draft_payload()["draft"],
+                "sentinel": "malformed-draft-request-sentinel",
+            },
+        ),
+    ],
+)
+def test_pydantic_body_validation_returns_stable_sanitized_error(
+    path: str, payload: dict
+) -> None:
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_AI_EVALUATION_INPUT"
+    assert "malformed-" not in response.text
+
+
 def test_evaluation_returns_provider_not_configured() -> None:
     service = AiAssistantService(Settings(ai_provider="openai"))
     app.dependency_overrides[get_ai_assistant] = lambda: service
@@ -165,4 +194,17 @@ def test_evaluation_endpoints_are_exposed_with_frozen_tags(path: str) -> None:
     operation = app.openapi()["paths"][path]["post"]
 
     assert operation["tags"] == ["ai-assistant", "ai-evaluation"]
-    assert operation["responses"]["200"]["content"]["application/json"]
+    responses = operation["responses"]
+    assert set(("200", "422", "502", "503")).issubset(responses)
+    assert responses["200"]["content"]["application/json"]["schema"]
+
+    error_contract = {
+        "422": "INVALID_AI_EVALUATION_INPUT",
+        "502": ("AI_PROVIDER_UNAVAILABLE", "AI_PROVIDER_INVALID_OUTPUT"),
+        "503": "AI_PROVIDER_NOT_CONFIGURED",
+    }
+    for status, codes in error_contract.items():
+        serialized = str(responses[status])
+        for code in (codes,) if isinstance(codes, str) else codes:
+            assert code in serialized
+        assert "sentinel" not in serialized.lower()
