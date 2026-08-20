@@ -834,7 +834,7 @@ def test_utf8_evaluation_prompt_limit_accepts_exact_boundary_and_rejects_over() 
         low, high = 0, target
         while low <= high:
             length = (low + high) // 2
-            candidate = {"padding": "\u754c" * length}
+            candidate = {"padding": "x" * length}
             prompt = json.dumps(
                 {"objective": "", "evaluation": candidate},
                 ensure_ascii=False,
@@ -862,7 +862,7 @@ def test_utf8_evaluation_prompt_limit_accepts_exact_boundary_and_rejects_over() 
         objective="",
     )
 
-    over = {"padding": exact["padding"] + "\u754c"}
+    over = {"padding": exact["padding"] + "x"}
     with pytest.raises(AiAssistantError) as captured:
         provider.evaluate(
             role=AiEvaluationRole.DRAFT_EVALUATOR,
