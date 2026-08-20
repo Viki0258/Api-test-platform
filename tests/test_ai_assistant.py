@@ -8,7 +8,16 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import app, get_ai_assistant
-from app.schemas import AiGenerateRequest
+from app.schemas import (
+    AiCandidateEvaluationRequest,
+    AiCaseInsight,
+    AiDraftEvaluationRequest,
+    AiEvaluationResponse,
+    AiEvaluationRole,
+    AiGenerateRequest,
+    TestCase,
+    TestRunRequest,
+)
 from app.services.ai_assistant import (
     AiAssistantService,
     AiAssistantError,
@@ -573,3 +582,231 @@ def test_sanitizer_and_provider_helpers_cover_defensive_shapes() -> None:
         }
     ) == {"required": "sample"}
     assert _preferred_success_status(["default", "404"]) == 200
+
+
+def generated_candidate_run(*, count: int = 1) -> TestRunRequest:
+    return TestRunRequest(
+        base_url="https://synthetic.example.test",
+        cases=[
+            TestCase(
+                id=f"candidate_{index}",
+                name=f"Synthetic candidate {index}",
+                method="GET",
+                path="/users/{user_id}",
+                query={"user_id": 1},
+                assertions=[{"type": "status_code", "expected": 200}],
+            )
+            for index in range(1, count + 1)
+        ],
+    )
+
+
+def test_mock_candidate_and_draft_evaluations_are_deterministic() -> None:
+    service = AiAssistantService(Settings())
+    candidate_request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(),
+        insights=[
+            AiCaseInsight(
+                case_id="candidate_1",
+                category="boundary",
+                rationale="Exercises the declared lower bound.",
+            )
+        ],
+    )
+
+    candidate = service.evaluate_candidates(candidate_request)
+    draft = service.evaluate_draft(
+        AiDraftEvaluationRequest(draft=generated_candidate_run())
+    )
+
+    assert candidate.role is AiEvaluationRole.CANDIDATE_EVALUATOR
+    assert draft.role is AiEvaluationRole.DRAFT_EVALUATOR
+    assert 0 <= candidate.score <= 100
+    assert 0 <= draft.score <= 100
+    assert candidate.evaluated_case_count == 1
+    assert draft.evaluated_case_count == 1
+    assert candidate.requires_human_review is True
+    assert draft.requires_human_review is True
+    assert candidate.model_dump() == service.evaluate_candidates(
+        candidate_request
+    ).model_dump()
+    assert draft.model_dump() == service.evaluate_draft(
+        AiDraftEvaluationRequest(draft=generated_candidate_run())
+    ).model_dump()
+
+
+def test_evaluation_response_enforces_strict_contract_bounds() -> None:
+    base = {
+        "role": "candidate_evaluator",
+        "provider": "mock",
+        "score": 50,
+        "summary": "Synthetic summary",
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "evaluated_case_count": 1,
+        "requires_human_review": True,
+    }
+
+    for invalid_score in (-1, 101):
+        with pytest.raises(ValueError):
+            AiEvaluationResponse.model_validate({**base, "score": invalid_score})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "strengths": ["x"] * 11})
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {
+                **base,
+                "issues": [
+                    {
+                        "case_id": "candidate_1",
+                        "severity": "warning",
+                        "title": "x" * 201,
+                        "detail": "detail",
+                        "suggestion": "suggestion",
+                    }
+                ],
+            }
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate(
+            {**base, "requires_human_review": False}
+        )
+    with pytest.raises(ValueError):
+        AiEvaluationResponse.model_validate({**base, "unexpected": "synthetic"})
+
+
+def test_evaluation_rejects_unknown_case_ids_without_echoing_source() -> None:
+    request = AiCandidateEvaluationRequest(
+        document=ai_document(),
+        candidate_run=generated_candidate_run(),
+        insights=[
+            AiCaseInsight(
+                case_id="unknown_case",
+                category="negative",
+                rationale="Synthetic unknown case.",
+            )
+        ],
+    )
+
+    with pytest.raises(AiAssistantError) as captured:
+        AiAssistantService(Settings()).evaluate_candidates(request)
+    assert captured.value.code == "INVALID_AI_EVALUATION_INPUT"
+
+
+def test_evaluation_rejects_source_over_one_mib_with_evaluation_error() -> None:
+    oversized_document = ai_document()
+    oversized_document["x-synthetic-padding"] = "x" * 1_048_577
+    request = AiCandidateEvaluationRequest(
+        document=oversized_document,
+        candidate_run=generated_candidate_run(),
+        insights=[],
+    )
+
+    with pytest.raises(AiAssistantError) as captured:
+        AiAssistantService(Settings()).evaluate_candidates(request)
+    assert captured.value.code == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert captured.value.status_code == 422
+
+
+def test_openai_evaluation_uses_separate_strict_role_instructions() -> None:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        role = "candidate_evaluator" if len(captured) == 1 else "draft_evaluator"
+        result = {
+            "role": role,
+            "provider": "openai",
+            "model": "synthetic-model",
+            "score": 75,
+            "summary": "Synthetic evaluation",
+            "strengths": ["relative paths"],
+            "issues": [],
+            "recommendations": ["human review"],
+            "evaluated_case_count": 1,
+            "requires_human_review": True,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(result),
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+    provider = OpenAiProvider(
+        api_key="synthetic-api-key",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+    service = AiAssistantService(Settings(), provider=provider)
+    candidate_request = AiCandidateEvaluationRequest(
+        document=ai_document(secret="synthetic-secret"),
+        candidate_run=generated_candidate_run(),
+        insights=[],
+        objective="Synthetic candidate objective",
+    )
+    draft_request = AiDraftEvaluationRequest(
+        document=ai_document(secret="synthetic-secret"),
+        draft=generated_candidate_run(),
+        objective="Synthetic draft objective",
+    )
+
+    candidate = service.evaluate_candidates(candidate_request)
+    draft = service.evaluate_draft(draft_request)
+
+    assert candidate.role is AiEvaluationRole.CANDIDATE_EVALUATOR
+    assert draft.role is AiEvaluationRole.DRAFT_EVALUATOR
+    assert len(captured) == 2
+    assert captured[0]["model"] == captured[1]["model"] == "synthetic-model"
+    assert captured[0]["store"] is captured[1]["store"] is False
+    assert captured[0]["instructions"] != captured[1]["instructions"]
+    assert "candidate" in captured[0]["instructions"].lower()
+    assert "draft" in captured[1]["instructions"].lower()
+    for body in captured:
+        assert body["text"]["format"]["type"] == "json_schema"
+        assert body["text"]["format"]["strict"] is True
+        assert body["text"]["format"]["schema"]
+        assert "synthetic-secret" not in body["input"]
+
+
+def test_openai_evaluation_maps_unavailable_and_invalid_output() -> None:
+    def unavailable(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"error": "synthetic"})
+
+    provider = OpenAiProvider(
+        api_key="synthetic",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(unavailable),
+    )
+    request = AiDraftEvaluationRequest(draft=generated_candidate_run())
+    with pytest.raises(AiAssistantError) as unavailable_error:
+        AiAssistantService(Settings(), provider=provider).evaluate_draft(request)
+    assert unavailable_error.value.code == "AI_PROVIDER_UNAVAILABLE"
+
+    def invalid_output(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"output_text": "{}"})
+
+    provider = OpenAiProvider(
+        api_key="synthetic",
+        model="synthetic-model",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(invalid_output),
+    )
+    with pytest.raises(AiAssistantError) as invalid_error:
+        AiAssistantService(Settings(), provider=provider).evaluate_draft(request)
+    assert invalid_error.value.code == "AI_PROVIDER_INVALID_OUTPUT"
