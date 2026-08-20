@@ -55,10 +55,22 @@ AI_EVALUATION_RESPONSES = {
         "description": "Invalid AI evaluation input.",
         "content": {
             "application/json": {
-                "example": {
-                    "detail": {
-                        "code": "INVALID_AI_EVALUATION_INPUT",
-                        "message": AI_EVALUATION_ERROR_MESSAGE,
+                "examples": {
+                    "invalid_input": {
+                        "value": {
+                            "detail": {
+                                "code": "INVALID_AI_EVALUATION_INPUT",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
+                    },
+                    "source_too_large": {
+                        "value": {
+                            "detail": {
+                                "code": "AI_EVALUATION_SOURCE_TOO_LARGE",
+                                "message": AI_EVALUATION_ERROR_MESSAGE,
+                            }
+                        }
                     }
                 }
             }
