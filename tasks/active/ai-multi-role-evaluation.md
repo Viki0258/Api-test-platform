@@ -1,6 +1,6 @@
 # ai-multi-role-evaluation — 多角色 AI 候选与草稿评测
 
-状态：DESIGN
+状态：IMPLEMENT
 
 ## 目标
 
