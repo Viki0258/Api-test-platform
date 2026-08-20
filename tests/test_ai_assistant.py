@@ -799,6 +799,17 @@ def test_evaluation_does_not_execute_persist_or_mutate_inputs(monkeypatch) -> No
     assert result.requires_human_review is True
     assert request.model_dump(mode="json") == before
 
+    draft_request = AiDraftEvaluationRequest(
+        document=ai_document(),
+        draft=generated_candidate_run(),
+    )
+    draft_before = copy.deepcopy(draft_request.model_dump(mode="json"))
+
+    draft_result = AiAssistantService(Settings()).evaluate_draft(draft_request)
+
+    assert draft_result.requires_human_review is True
+    assert draft_request.model_dump(mode="json") == draft_before
+
 
 def test_utf8_evaluation_prompt_limit_accepts_exact_boundary_and_rejects_over() -> None:
     def response(_request: httpx.Request) -> httpx.Response:
@@ -875,6 +886,7 @@ def test_openai_evaluation_uses_separate_strict_role_instructions() -> None:
         "example": "sentinel-example-value",
         "default": "sentinel-default-value",
         "auth": "sentinel-auth-value",
+        "document_secret": "sentinel-document-secret",
     }
     source_document = ai_document(secret="sentinel-document-secret")
     source_document["servers"] = [{"url": sentinels["base_url"]}]
