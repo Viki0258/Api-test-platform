@@ -176,7 +176,9 @@ def test_ai_evaluation_response_validator_rejects_contract_boundary_errors() -> 
         '"use strict";\n' + definition + "\n" +
         f"const valid = {json.dumps(valid)};\nconst variants = {json.dumps(variants)};\n" +
         "function attempt(value) { try { validateAiEvaluationResponse(value, 'candidate_evaluator', new Set(['case_1'])); return true; } catch (_error) { return false; } }\n" +
-        "process.stdout.write(JSON.stringify({valid: attempt(valid), variants: Object.fromEntries(Object.entries(variants).map(([k, v]) => [k, attempt({...valid, ...v}])))}));\n"
+        "const outcomes = {};\n"
+        "for (const [key, value] of Object.entries(variants)) { outcomes[key] = attempt({...valid, ...value}); }\n"
+        "process.stdout.write(JSON.stringify({valid: attempt(valid), variants: outcomes}));\n"
     )
     completed = subprocess.run(["node", "-"], input=program, text=True, encoding="utf-8", capture_output=True, check=False, cwd=repository_root)
     assert completed.returncode == 0, completed.stderr
@@ -188,9 +190,8 @@ def test_ai_evaluation_response_validator_rejects_contract_boundary_errors() -> 
 def test_candidate_generation_auto_evaluates_and_keeps_candidates_on_failure() -> None:
     javascript = javascript_source()
     generator = function_block(javascript, "generateAiCases")
+    assert 'registerReviewSource("ai", result.run, result.insights)' in generator
     assert re.search(r"evaluateCandidates\s*\(.*manual\s*:\s*false", generator, re.DOTALL)
-    assert "reviewCandidates" in generator
-    assert "evaluateCandidates" in generator
 
 
 def test_feedback_rendering_uses_safe_dom_text_and_stale_draft_is_not_evaluated_per_input() -> None:

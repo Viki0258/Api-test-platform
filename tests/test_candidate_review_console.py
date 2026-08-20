@@ -230,9 +230,10 @@ def test_candidate_evaluation_failure_does_not_clear_registered_candidates() -> 
     javascript = javascript_source()
     generator = function_block(javascript, "generateAiCases")
     evaluator = function_block(javascript, "evaluateCandidates")
+    assert 'registerReviewSource("ai", result.run, result.insights)' in generator
     assert re.search(r"evaluateCandidates\s*\(.*manual\s*:\s*false", generator, re.DOTALL)
-    assert "reviewCandidates" in evaluator
     assert re.search(r"catch\s*\([^)]*\)", evaluator)
+    assert "setCandidateEvaluationStatus(" in evaluator
     assert "removeReviewSource" not in evaluator
 
 
