@@ -131,6 +131,19 @@ def test_evaluation_returns_provider_not_configured() -> None:
     assert response.json()["detail"]["code"] == "AI_PROVIDER_NOT_CONFIGURED"
 
 
+def test_candidate_evaluation_rejects_oversized_source_without_echoing_it() -> None:
+    payload = candidate_payload()
+    payload["document"]["x-synthetic-padding"] = (
+        "source-too-large-sentinel" + "x" * 1_048_577
+    )
+
+    response = client.post("/api/v1/ai/cases/evaluate", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "AI_EVALUATION_SOURCE_TOO_LARGE"
+    assert "source-too-large-sentinel" not in response.text
+
+
 class _UnavailableProvider:
     name = "synthetic-provider"
     model = "synthetic-model"
@@ -199,7 +212,10 @@ def test_evaluation_endpoints_are_exposed_with_frozen_tags(path: str) -> None:
     assert responses["200"]["content"]["application/json"]["schema"]
 
     error_contract = {
-        "422": "INVALID_AI_EVALUATION_INPUT",
+        "422": (
+            "AI_EVALUATION_SOURCE_TOO_LARGE",
+            "INVALID_AI_EVALUATION_INPUT",
+        ),
         "502": ("AI_PROVIDER_UNAVAILABLE", "AI_PROVIDER_INVALID_OUTPUT"),
         "503": "AI_PROVIDER_NOT_CONFIGURED",
     }
